@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- launchd agent — runs the Seen Command OVERNIGHT co-CEO loop daily at 6 AM: a board meeting, then
+     auto-builds the safe (label-gated) engineering queue via the test-gated builder, then leaves the
+     morning briefing. Template: scripts/schedule-macos.sh fills __REPO__ and __NODE__ and installs it
+     to ~/Library/LaunchAgents/. Survives sleep/wake and retries missed runs. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.seen-command.agent</string>
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__REPO__/engine/overnight.mjs</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>6</integer>
+    <key>Minute</key><integer>0</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>__REPO__/data/run.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO__/data/run.log</string>
+</dict>
+</plist>

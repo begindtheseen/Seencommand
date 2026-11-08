@@ -1,0 +1,52 @@
+# The full node:test suite on every push/PR — the same gate the builder runs locally
+# (node --test over every *.test.mjs, same exclusions). Zero npm install: the repo is
+# dependency-free pure Node; Electron is a devDependency used only for packaging, never for tests.
+# Fulfills task #87 ("automated tests integrated into our CI pipeline and passing").
+#
+# HANG-PROOF, after the 2026-08-12/13 wedge: runs on shas that had ALREADY passed began sitting
+# in_progress for hours. Forensics (run 31654773506): checkout 1s, setup-node 4s, then the suite
+# printed two files' output in under a second and NOTHING for 70 minutes, and the runner killed two
+# ORPHANED node child processes at cleanup — some test spawns a `node --test` child that never exits
+# on the current runner image (the same suite passes in 7s on macOS under the identical node
+# 22.23.1). Defenses, in order:
+#   • per-file `timeout 120` — a hanging file FAILS LOUDLY WITH ITS NAME (rc=124) instead of wedging
+#     the run. (--test-force-exit was considered and rejected: it raced exit codes in rehearsal.)
+#   • sequential per-file loop — deterministic order, so "last name printed" = the culprit
+#   • job-level timeout-minutes 15 — the backstop for anything the above misses
+# Cost: sequential is slower than one batched run (~1-2 min vs ~35s). Buying diagnosability with it.
+name: tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # The dashboard is generated output (never committed). Build a blank one offline so the
+      # dashboard tests have something to parse — no credentials or live data are used.
+      - name: Generate a blank dashboard
+        run: node engine/run.mjs && node scripts/build-dashboard.mjs
+      - name: Run the full suite (builder-gate parity, hang-proof per file)
+        run: |
+          set -u
+          FAILED=0
+          while IFS= read -r -d '' f; do
+            echo "── $f"
+            rc=0
+            # </dev/null: the loop's stdin is the find pipe; a child that reads stdin must not eat it.
+            timeout -k 10 120 node --test "$f" </dev/null || rc=$?
+            if [ "$rc" -ne 0 ]; then
+              echo "::error file=$f::test file failed or hung (rc=$rc; 124 = 120s timeout)"
+              FAILED=1
+            fi
+          done < <(find . -name '*.test.mjs' \
+            -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/.claude/*' \
+            -not -path '*/dist/*' -not -path '*/data/*' -not -path '*/public/*' -print0 | sort -z)
+          exit $FAILED

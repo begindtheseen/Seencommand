@@ -1,0 +1,67 @@
+node_modules/
+.DS_Store
+dist/
+# Secrets — NEVER commit. .env holds live API keys.
+.env
+.env*
+!.env.example
+# Local fallback vault (runtime; the real brain is the external Chronos vault via CHRONOS_VAULT)
+data/brain/
+# Per-build status records the background runner writes (runtime state, not code)
+data/builds/
+# Per-machine intelligence runtime caches, workflow checkpoints, cost/tool ledgers, and Forge maps.
+data/forge/
+data/intelligence/
+# Append-only activity ledger the app writes for Claude to read (per-machine runtime state, not code)
+data/activity/
+# Per-machine cloud-sync watermark (brain/lib/cloud.mjs push guard) — runtime state, not brain content
+data/cloud-sync.json
+# Per-machine git→brain narration cursor (brain/lib/git-episodes.mjs) — the last commit narrated on
+# THIS machine. Runtime state: committing it would make one machine's position everyone's position.
+data/brain-git-cursor.json
+# Instagram compiler runtime state (durable jobs, downloaded/derived projects, guidance drafts) —
+# per-machine, never code. Real read-only creator data lives outside the repo (see instagram-readonly-roots.json).
+data/instagram-jobs/
+data/instagram-projects/
+data/instagram-guidance/
+# Debugging bundles written by `node scripts/ops.mjs logs` — dated snapshots of CI/Vercel/build logs.
+# Per-machine, regenerable, and they can carry log text; never commit them.
+data/exports/
+# The failure patch queue — per-machine runtime state (lib/failure-loop.mjs)
+data/failures/
+brain/build-info.json
+
+# Vendored Python compiler — build/runtime artifacts (source is tracked)
+tools/video-software-compiler/**/__pycache__/
+tools/video-software-compiler/**/*.pyc
+tools/video-software-compiler/**/*.egg-info/
+tools/video-software-compiler/build/
+tools/video-software-compiler/.venv/
+
+# Agent tooling scaffolding (Codex/Claude session dirs). Runtime, per-machine — never code.
+# Left untracked these blocked EVERY builder run on 2026-08-04 ("uncommitted CODE changes").
+.agents/
+.codex/
+
+# written at app build time by scripts/stamp-build.mjs — describes ONE build, never committed
+build-info.json
+data/base-health.json
+# Per-machine runtime state written by the running app (never code)
+data/aggregation/
+data/notifications.json
+data/skills-seen.json
+data/update-state.json
+data/searches.json
+# Parallel-agent working copies (git worktrees) — never part of the repo
+.claude/worktrees/
+data/simulations/
+data/home-cache.json
+data/data-health.json
+# Growth Studio runtime state (brand versions, plan, calendar, drafts, library PNGs) — per machine; pointers live in the brain
+data/growth/
+# Local scratch (screenshots, render harnesses)
+scratch/
+
+# Generated dashboard (npm run brief) — embeds live data, never commit
+public/command-center.html
+data/state.json

@@ -1,0 +1,6 @@
+{
+  "models": [
+    { "id": "qwen2.5-coder-14b", "providerId": "ollama", "providerModel": "qwen2.5-coder:14b", "runtime": "local", "capabilities": ["classify", "summarize", "plan", "code", "review", "structured_output", "repository_reasoning"], "enabled": true },
+    { "id": "frontier-review", "providerId": "anthropic", "providerModel": "configure-current-approved-model", "runtime": "remote", "capabilities": ["plan", "code", "review", "security", "structured_output", "repository_reasoning"], "enabled": false, "pricingUsdPerMillion": { "input": 0, "output": 0 } }
+  ]
+}

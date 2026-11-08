@@ -1,0 +1,1712 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Chronos — Live Memory Graph</title>
+<!--
+  Chronos renderer — ONE self-contained file. No CDN, no web fonts, no npm, no build step: everything
+  (styles, glyphs, logic) is inline, because this ships inside a signed .app that must work offline.
+  contextIsolation stays on; the only outside world is window.chronos (see preload.js).
+
+  THE DESIGN, AND WHERE IT COMES FROM
+  Chronos shows a BI-TEMPORAL brain: facts are born, are true for a while, get superseded, and stay
+  as history. So the interface is built on one semantic pair, used everywhere without exception:
+      NOW  (teal, --now)   = still true / the moment you are viewing
+      THEN (violet, --then) = was true / history, kept not deleted
+  From that pair come the recurring forms: the validity WINDOW chip (from → to) that every fact-shaped
+  row carries, the STRATA hairlines (time ruled into intervals) in the timeline bed and under section
+  headers, and the NOW-SEAM — a single line of light at the newest stamp, echoed as the marker on the
+  active nav item. Surfaces are frosted glass with an inset top highlight over an aurora field; radii
+  are 16/24 (12 for chips, pill for CTAs). Numbers are monospace + tabular so dates never jitter.
+  Spacing is one scale (4/8/12/16/24/32/48) — every gap in this file is a step on it.
+
+  LAYOUT is a fixed CSS-grid app shell: rail | (header / views / status strip). Views are stacked in
+  one grid cell and cross-faded, so the graph canvas keeps its size while you read another view and
+  coming back is instant. Nothing floats where it can collide: the timeline is a real dock row and the
+  error banner is a real row, so neither can ever cover the graph.
+-->
+<style>
+:root{
+  /* spacing scale — every gap in this file is one of these */
+  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--s7:48px;
+  /* shell metrics */
+  --rail:92px;--nav-w:76px;--head:60px;--strip:34px;
+  /* radii — the approved family */
+  --r-sm:12px;--r-md:16px;--r-lg:24px;--r-pill:999px;
+
+  --bg:#06090f;--bg2:#0a0e17;
+  --panel:rgba(17,23,35,.68);--panel2:rgba(23,30,45,.46);
+  --ink:#eaeefa;--ink2:#b8c1d5;--muted:#8b94a7;
+  --line:rgba(255,255,255,.10);--line2:rgba(255,255,255,.055);
+  /* the temporal pair the whole app runs on */
+  --now:#3ee6d0;--then:#c792ea;--glow:var(--now);
+  --green:#34d399;--amber:#fbbf24;--red:#f87171;
+  --g-knowledge:#5b8cff;--g-timeline:#c792ea;--g-decisions:#ffb454;--g-people:#ff6b8b;
+  --g-meta:#3ee6d0;--g-entity:#7ee0c0;--g-value:#6b7689;
+  --frost:inset 0 1px 0 rgba(255,255,255,.09);
+  --lift:0 18px 48px rgba(0,0,0,.44);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:
+    radial-gradient(760px 520px at 8% 10%,rgba(91,140,255,.15),transparent 62%),
+    radial-gradient(720px 500px at 96% 14%,rgba(199,146,234,.13),transparent 62%),
+    radial-gradient(900px 620px at 46% 116%,rgba(62,230,208,.13),transparent 62%),
+    var(--bg);
+  background-attachment:fixed;color:var(--ink);overflow:hidden;
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:14px;
+  -webkit-font-smoothing:antialiased;
+}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+button{font-family:inherit}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.10);border-radius:var(--r-pill);border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.18);background-clip:content-box}
+
+/* aurora — one slow drifting wash so the app reads as alive, not animated. */
+.aurora{position:fixed;inset:-20%;z-index:0;pointer-events:none;opacity:.5;
+  background:radial-gradient(46% 38% at 30% 34%,rgba(62,230,208,.16),transparent 70%),
+             radial-gradient(40% 34% at 72% 60%,rgba(199,146,234,.14),transparent 70%);
+  filter:blur(30px);animation:drift 64s ease-in-out infinite alternate}
+@keyframes drift{from{transform:translate3d(-2%,-1%,0) scale(1)}to{transform:translate3d(3%,2%,0) scale(1.07)}}
+@media (prefers-reduced-motion:reduce){.aurora{animation:none}}
+
+/* ================= app shell ================= */
+.app{position:fixed;inset:0;z-index:1;display:grid;
+  grid-template-columns:var(--rail) minmax(0,1fr);
+  grid-template-rows:var(--head) minmax(0,1fr) var(--strip)}
+
+/* ---- left rail: the view spine ---- */
+.rail{grid-column:1;grid-row:1 / 3;position:relative;display:flex;flex-direction:column;
+  align-items:center;gap:var(--s2);padding-bottom:var(--s4);
+  background:linear-gradient(180deg,rgba(12,17,27,.72),rgba(8,11,19,.58));
+  border-right:1px solid var(--line);backdrop-filter:blur(20px) saturate(1.2);
+  -webkit-backdrop-filter:blur(20px) saturate(1.2)}
+.mark{height:var(--head);display:grid;place-items:center;flex:none}
+.mark i{width:34px;height:34px;border-radius:var(--r-sm);display:grid;place-items:center;
+  font-style:normal;font-size:15px;color:#04121a;font-weight:800;
+  background:linear-gradient(140deg,var(--now),#5b8cff 78%,var(--then));
+  box-shadow:0 6px 18px rgba(62,230,208,.28),var(--frost)}
+.rail-nav{position:relative;display:flex;flex-direction:column;gap:var(--s2);
+  padding:var(--s2) 0;width:100%;align-items:center}
+/* the spine: the three views strung on one line of time */
+.rail-nav::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;margin-left:-.5px;
+  background:linear-gradient(180deg,transparent,var(--line) 18%,var(--line) 82%,transparent)}
+.navitem{position:relative;width:var(--nav-w);padding:var(--s2) 0 7px;border:1px solid transparent;
+  border-radius:var(--r-md);background:transparent;color:var(--muted);cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;gap:5px;transition:color .14s,background .14s,border-color .14s}
+.navitem svg{display:block}
+.navitem .ni-label{font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;font-weight:600}
+.navitem:hover{color:var(--ink2);background:rgba(255,255,255,.045);border-color:var(--line2)}
+.navitem.on{color:var(--ink);background:linear-gradient(180deg,rgba(62,230,208,.13),rgba(62,230,208,.05));
+  border-color:rgba(62,230,208,.28);box-shadow:var(--frost)}
+/* the now-seam, reused as the active marker. The offset is DERIVED from the rail so the marker lands
+   exactly flush inside the rail's edge at either rail width — a hardcoded value overflowed it. */
+.navitem.on::after{content:"";position:absolute;top:50%;transform:translateY(-50%);
+  right:calc(-1 * (var(--rail) - 1px - var(--nav-w)) / 2);
+  width:2px;height:24px;border-radius:2px;background:var(--now);box-shadow:0 0 12px 1px rgba(62,230,208,.75)}
+/* the key to the whole app's colour language, kept where it is always in sight */
+.rail-foot{margin-top:auto;display:flex;flex-direction:column;align-items:flex-start;gap:6px;
+  padding-left:14px;font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+.rail-foot span{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.rail-foot i{width:7px;height:7px;border-radius:50%;flex:none}
+.rail-foot .k-now{background:var(--now);box-shadow:0 0 8px rgba(62,230,208,.7)}
+.rail-foot .k-then{background:var(--then)}
+
+/* ---- header ---- */
+.head{grid-column:2;grid-row:1;display:flex;align-items:center;gap:var(--s4);
+  padding:0 var(--s5);border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg,rgba(10,14,23,.62),rgba(8,11,18,.34));
+  backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
+.hd-left{display:flex;align-items:baseline;gap:var(--s3);min-width:0}
+.wordmark{font-size:15px;font-weight:650;letter-spacing:.015em;white-space:nowrap}
+.ver{font-size:10px;color:var(--muted);white-space:nowrap;max-width:190px;overflow:hidden;text-overflow:ellipsis}
+.crumb{font-size:11.5px;color:var(--ink2);white-space:nowrap;padding-left:var(--s3);
+  border-left:1px solid var(--line)}
+.hd-right{margin-left:auto;display:flex;align-items:center;gap:var(--s2);min-width:0}
+.search{display:flex;align-items:center;gap:7px;background:rgba(10,14,22,.6);border:1px solid var(--line);
+  border-radius:var(--r-pill);padding:6px var(--s3);min-width:0;transition:border-color .14s,box-shadow .14s}
+.search:focus-within{border-color:rgba(62,230,208,.45);box-shadow:0 0 0 3px rgba(62,230,208,.10)}
+.search .ic{color:var(--muted);font-size:13px;line-height:1}
+.search input{background:transparent;border:0;color:var(--ink);font:inherit;font-size:12.5px;
+  width:clamp(140px,22vw,260px);outline:none;min-width:0}
+.search input::placeholder{color:var(--muted)}
+.search .cnt{font-size:10px;color:var(--now);min-width:44px;text-align:right;white-space:nowrap;
+  font-family:ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums}
+.ghost{font-size:11.5px;padding:6px var(--s3);border-radius:var(--r-pill);border:1px solid var(--line);
+  background:transparent;color:var(--muted);cursor:pointer;white-space:nowrap;transition:.14s}
+.ghost:hover{color:var(--now);border-color:rgba(62,230,208,.5);box-shadow:0 0 16px rgba(62,230,208,.14)}
+.pill{border-radius:var(--r-pill);padding:5px var(--s3);font-size:11px;border:1px solid var(--line);
+  background:rgba(255,255,255,.04);color:var(--muted);white-space:nowrap;letter-spacing:.04em}
+.pill.live{background:rgba(52,211,153,.10);border-color:rgba(52,211,153,.30);color:var(--green)}
+.pill.live::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;
+  background:var(--green);box-shadow:0 0 8px var(--green);margin-right:7px;vertical-align:middle;animation:pulse 2.4s infinite}
+.pill.warn{background:rgba(251,191,36,.10);border-color:rgba(251,191,36,.32);color:var(--amber)}
+.pill.beat{animation:beat .7s ease-out}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes beat{from{box-shadow:0 0 0 0 rgba(62,230,208,.45)}to{box-shadow:0 0 0 16px rgba(62,230,208,0)}}
+
+/* ---- view stack ---- */
+.views{grid-column:2;grid-row:2;position:relative;min-width:0;min-height:0}
+.view{position:absolute;inset:0;opacity:0;pointer-events:none;transition:opacity .18s ease}
+.view.on{opacity:1;pointer-events:auto}
+/* the graph view stays laid out even when faded, so the canvas keeps its size */
+#view-graph{visibility:visible}
+#view-activity,#view-health{visibility:hidden;
+  background:linear-gradient(180deg,rgba(8,11,19,.93),rgba(6,9,15,.97));
+  backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px)}
+#view-activity.on,#view-health.on{visibility:visible}
+
+/* ---- status strip ---- */
+.strip{grid-column:1 / 3;grid-row:3;display:flex;align-items:center;gap:var(--s4);
+  padding:0 var(--s5);font-size:10.5px;color:var(--muted);white-space:nowrap;overflow:hidden;
+  border-top:1px solid var(--line);background:rgba(6,9,15,.72);
+  backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+.strip b{color:var(--ink);font-weight:600}
+.strip .st{display:flex;align-items:center;gap:6px;min-width:0;flex:0 0 auto}
+.strip .st.shrink{flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;display:block}
+.strip .sep{width:1px;height:13px;background:var(--line);flex:none}
+.strip .push{margin-left:auto;flex:none;color:rgba(139,148,167,.75)}
+.dotk{width:6px;height:6px;border-radius:50%;flex:none;background:var(--muted);display:inline-block;
+  vertical-align:middle;margin-right:5px}
+.dotk.ok{background:var(--now);box-shadow:0 0 7px rgba(62,230,208,.75)}
+.dotk.miss{background:var(--amber);box-shadow:0 0 7px rgba(251,191,36,.6)}
+
+/* ================= graph view ================= */
+/* Rows are placed EXPLICITLY: the notice is display:none most of the time, and a hidden element is not
+   a grid item — implicit placement would slide the stage into the notice's row and collapse it. */
+#view-graph{display:grid;grid-template-rows:auto minmax(0,1fr) auto}
+#view-graph > .banner{grid-row:1}
+#view-graph > .stage{grid-row:2}
+#view-graph > .dock{grid-row:3}
+.stage{position:relative;overflow:hidden;min-height:0}
+#cv{position:absolute;inset:0;display:block;cursor:grab}
+#cv.panning,#cv.dragging{cursor:grabbing}
+
+/* notice: a REAL row above the stage — it can never cover the graph or the filters */
+.banner{display:none;margin:var(--s3) var(--s5) 0;padding:10px var(--s4);border-radius:var(--r-sm);
+  background:rgba(251,191,36,.10);border:1px solid rgba(251,191,36,.34);color:var(--amber);
+  font-size:12px;line-height:1.55;white-space:normal}
+.banner.on{display:block}
+
+/* glass surface */
+.glass{background:var(--panel);backdrop-filter:blur(22px) saturate(1.35);
+  -webkit-backdrop-filter:blur(22px) saturate(1.35);border:1px solid var(--line);
+  border-radius:var(--r-lg);box-shadow:var(--lift),var(--frost)}
+
+/* ---- filters ---- */
+/* the max-height leaves the hint line its own band at the bottom — the two can never overlap */
+.controls{position:absolute;top:var(--s4);left:var(--s4);width:228px;z-index:5;
+  padding:var(--s4);max-height:calc(100% - 52px);overflow-y:auto}
+.controls h4{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);
+  font-weight:600;margin:var(--s4) 0 var(--s2);display:flex;align-items:center;gap:var(--s2)}
+.controls h4:first-child{margin-top:0}
+.controls h4::after{content:"";flex:1;height:5px;
+  background:repeating-linear-gradient(180deg,var(--line2) 0 1px,transparent 1px 4px)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:11px;padding:4px 9px;border-radius:var(--r-pill);border:1px solid var(--line);cursor:pointer;
+  background:rgba(255,255,255,.03);color:var(--muted);user-select:none;transition:.12s;
+  display:flex;align-items:center;gap:6px}
+.chip:hover{border-color:rgba(255,255,255,.24);color:var(--ink)}
+.chip.on{color:var(--ink);background:rgba(255,255,255,.07)}
+.chip .sw{width:8px;height:8px;border-radius:50%;flex:none}
+.chip.off{opacity:.42}
+.chip.off .sw{filter:grayscale(1)}
+.legend .row{display:flex;align-items:center;gap:9px;font-size:12px;padding:5px 6px;border-radius:var(--s2);
+  cursor:pointer;user-select:none;color:var(--ink2)}
+.legend .row:hover{background:rgba(255,255,255,.05);color:var(--ink)}
+.legend .row.off{opacity:.38}
+.legend .dot{width:9px;height:9px;border-radius:50%;flex:none;box-shadow:0 0 8px currentColor}
+.legend .row .n{margin-left:auto;font-size:10px;color:var(--muted);
+  font-family:ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums}
+.shape-key{display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--muted)}
+.shape-key div{display:flex;align-items:center;gap:var(--s2)}
+.shape-key .mk{width:11px;height:11px;flex:none;border:1.5px solid var(--muted)}
+.shape-key .mk.c{border-radius:50%}
+.shape-key .mk.s{border-radius:3px}
+.tg{display:flex;align-items:center;gap:var(--s2);font-size:12px;color:var(--ink2);cursor:pointer;
+  user-select:none;padding:var(--s1) 0}
+.tg input{accent-color:var(--then);width:14px;height:14px}
+.hint{position:absolute;left:var(--s4);bottom:var(--s3);font-size:10px;color:var(--muted);
+  opacity:.62;pointer-events:none;z-index:3}
+
+/* ---- detail drawer ---- */
+.detail{position:absolute;top:var(--s4);right:var(--s4);width:min(340px,44%);z-index:7;
+  max-height:calc(100% - var(--s6));display:none;flex-direction:column;overflow:hidden}
+.detail.on{display:flex}
+.d-head{padding:var(--s4);border-bottom:1px solid var(--line);position:relative;flex:none}
+.d-badges{display:flex;gap:6px;margin-bottom:var(--s2);flex-wrap:wrap}
+.badge{font-size:9px;letter-spacing:.07em;text-transform:uppercase;font-weight:700;
+  padding:3px var(--s2);border-radius:var(--r-pill)}
+.badge.chronos{background:rgba(62,230,208,.15);color:var(--now)}
+.badge.command{background:rgba(91,140,255,.18);color:#8fb0ff}
+.badge.type{background:rgba(255,255,255,.07);color:var(--muted)}
+.d-title{font-size:15.5px;font-weight:650;line-height:1.32;word-break:break-word;padding-right:var(--s5)}
+.d-close{position:absolute;top:var(--s3);right:var(--s3);width:24px;height:24px;border-radius:var(--s2);
+  border:0;background:rgba(255,255,255,.06);color:var(--muted);cursor:pointer;font-size:13px;line-height:1}
+.d-close:hover{color:var(--ink);background:rgba(255,255,255,.13)}
+.d-body{padding:var(--s4);overflow-y:auto}
+.d-row{display:flex;justify-content:space-between;gap:var(--s3);font-size:12.5px;padding:6px 0;
+  border-bottom:1px solid var(--line2)}
+.d-row .k{color:var(--muted)}
+.d-row .v{color:var(--ink);text-align:right;font-weight:500;min-width:0;word-break:break-word}
+.d-sec{font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);
+  margin:var(--s4) 0 var(--s2)}
+.linklist{display:flex;flex-wrap:wrap;gap:6px}
+.linklist a{font-size:11.5px;color:#8fb0ff;background:rgba(91,140,255,.10);
+  border:1px solid rgba(91,140,255,.22);border-radius:var(--s2);padding:3px var(--s2);cursor:pointer;text-decoration:none}
+.linklist a:hover{background:rgba(91,140,255,.2)}
+.d-empty{color:var(--muted);font-size:12.5px;line-height:1.55}
+
+/* fact card — the validity window is the whole point, so it leads */
+.fact{background:rgba(255,255,255,.035);border:1px solid var(--line);border-radius:var(--r-sm);
+  padding:10px var(--s3);margin-bottom:var(--s2);border-left:2px solid var(--now)}
+.fact.expired{opacity:.62;border-left-color:var(--then)}
+.fact.future{opacity:.5;border-left-color:var(--muted);border-style:dashed;border-left-style:solid}
+.spo{font-size:13px;line-height:1.5;word-break:break-word}
+.spo .pred{color:var(--now);font-weight:600}
+.spo .obj{color:var(--ink);font-weight:600}
+.fact .meta{margin-top:7px;display:flex;flex-wrap:wrap;gap:5px}
+.tag{font-size:10px;padding:2px 7px;border-radius:7px;background:rgba(255,255,255,.05);
+  color:var(--muted);font-family:ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums}
+.tag.win{color:var(--now);background:rgba(62,230,208,.09)}
+.tag.win.exp{color:var(--then);background:rgba(199,146,234,.11)}
+.tag.state-active{color:var(--green);background:rgba(52,211,153,.10)}
+.tag.state-expired{color:var(--then);background:rgba(199,146,234,.11)}
+.tag.state-future{color:var(--muted)}
+.tag.conf-high{color:var(--green)}.tag.conf-medium{color:var(--amber)}.tag.conf-low{color:var(--red)}
+.tag.prov{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---- timeline dock: a structural row, not a floating panel ---- */
+.dock{padding:var(--s3) var(--s5) var(--s3);border-top:1px solid var(--line);
+  background:linear-gradient(180deg,rgba(11,15,24,.5),rgba(7,10,17,.82));
+  backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px)}
+.dock-top{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;
+  gap:var(--s4);margin-bottom:var(--s2)}
+.play{width:34px;height:34px;border-radius:50%;border:1px solid var(--line);background:rgba(20,26,39,.9);
+  color:var(--ink);font-size:12px;cursor:pointer;display:grid;place-items:center;transition:.15s;flex:none}
+.play:hover{border-color:var(--now);color:var(--now);box-shadow:0 0 16px rgba(62,230,208,.3)}
+.readout{min-width:0}
+.ro-date{font-size:18px;font-weight:600;letter-spacing:.005em;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;line-height:1.2}
+.ro-sub{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.ro-sub b{color:var(--now);font-weight:600}
+.ro-sub .exp{color:var(--then)}
+.spans{display:flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:var(--r-pill);
+  background:rgba(255,255,255,.03)}
+.spans button{font-size:10.5px;padding:4px 11px;border-radius:var(--r-pill);border:0;background:transparent;
+  color:var(--muted);cursor:pointer;white-space:nowrap;transition:.12s}
+.spans button:hover{color:var(--ink2)}
+.spans button.on{color:#04121a;background:linear-gradient(140deg,var(--now),#69d7ff);font-weight:600}
+.track{position:relative;height:26px;display:flex;align-items:center}
+.track-bed{position:absolute;left:9px;right:9px;top:50%;transform:translateY(-50%);height:8px;
+  border-radius:var(--r-pill);background:rgba(255,255,255,.045);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05);overflow:hidden}
+/* strata: time ruled into intervals, the way sediment rules a cliff face */
+.track-bed::after{content:"";position:absolute;inset:0;
+  background:repeating-linear-gradient(90deg,rgba(255,255,255,.14) 0 1px,transparent 1px 38px)}
+.track-fill{position:absolute;left:9px;top:50%;transform:translateY(-50%);height:8px;
+  border-radius:var(--r-pill);width:calc((100% - 18px) * var(--pctn,1));
+  background:linear-gradient(90deg,rgba(199,146,234,.5),rgba(62,230,208,.9));
+  box-shadow:0 0 18px rgba(62,230,208,.25)}
+/* the now-seam: a single line of light at the newest stamp Chronos knows about */
+.track::after{content:"";position:absolute;right:9px;top:3px;bottom:3px;width:1px;background:var(--now);
+  box-shadow:0 0 10px 1px rgba(62,230,208,.6);opacity:.8;pointer-events:none}
+#slider{position:relative;z-index:2;flex:1;height:10px;margin:0;background:transparent;
+  -webkit-appearance:none;appearance:none;outline:none}
+#slider::-webkit-slider-runnable-track{height:10px;background:transparent}
+#slider::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;
+  background:#0a0f19;border:2.5px solid var(--now);cursor:grab;
+  box-shadow:0 0 0 3px rgba(62,230,208,.12),0 0 16px rgba(62,230,208,.55)}
+#slider:active::-webkit-slider-thumb{cursor:grabbing;box-shadow:0 0 0 5px rgba(62,230,208,.16),0 0 20px rgba(62,230,208,.7)}
+.ends{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:var(--s3);margin-top:6px;
+  font-size:10px;color:var(--muted)}
+.ends .mid{text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.8}
+.ends .to{text-align:right;color:var(--now)}
+
+/* ================= reading views (activity + health) ================= */
+.pane{position:absolute;inset:0;overflow-y:auto;overscroll-behavior:contain}
+.pane-in{max-width:1080px;margin:0 auto;padding:var(--s5) var(--s5) var(--s7)}
+.vhead{display:flex;align-items:flex-end;gap:var(--s4);padding-bottom:var(--s3);margin-bottom:var(--s4);
+  position:relative}
+.vhead::after{content:"";position:absolute;left:0;right:0;bottom:0;height:7px;
+  background:repeating-linear-gradient(180deg,var(--line2) 0 1px,transparent 1px 3px)}
+.vhead h1{font-size:22px;font-weight:650;letter-spacing:-.01em;line-height:1.15}
+/* text-wrap:pretty keeps prose from ending on a two-word orphan line at any window width */
+.vsub{font-size:12px;color:var(--muted);margin-top:5px;line-height:1.5;max-width:72ch;text-wrap:pretty}
+.vhead .acts{margin-left:auto;display:flex;gap:var(--s2);flex:none}
+.segs{display:inline-flex;gap:2px;padding:3px;border:1px solid var(--line);border-radius:var(--r-pill);
+  background:rgba(255,255,255,.03);margin-bottom:var(--s4);max-width:100%;overflow:hidden}
+.act-tab{font-size:11.5px;padding:6px var(--s4);border-radius:var(--r-pill);border:0;background:transparent;
+  color:var(--muted);cursor:pointer;white-space:nowrap;transition:.12s}
+.act-tab:hover{color:var(--ink2)}
+.act-tab.on{color:var(--ink);background:rgba(255,255,255,.08);box-shadow:var(--frost)}
+.act-tab .n{color:var(--now);margin-left:6px;font-family:ui-monospace,Menlo,monospace;
+  font-variant-numeric:tabular-nums;font-size:10.5px}
+.act-tab.on .n{color:var(--now)}
+
+/* day header — sticky, so you always know which stratum you are reading */
+.act-day{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:var(--s3);
+  margin:var(--s5) 0 var(--s2);padding:7px 0;font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--muted);background:linear-gradient(180deg,rgba(7,10,17,.97),rgba(7,10,17,.86));
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.act-day:first-child{margin-top:0}
+.act-day.today{color:var(--now)}
+.act-day .ln{flex:1;height:1px;background:var(--line2)}
+.act-day .ct{color:var(--muted);letter-spacing:.06em}
+
+/* event row: spine (state) + body. A real grid column for the spine keeps every line aligned. */
+.evt{display:grid;grid-template-columns:2px minmax(0,1fr);gap:var(--s3);padding:9px 0;
+  border-bottom:1px solid var(--line2)}
+.evt-spine{border-radius:2px;background:var(--muted)}
+.evt.added .evt-spine{background:var(--now);box-shadow:0 0 8px rgba(62,230,208,.45)}
+.evt.changed .evt-spine{background:var(--amber);box-shadow:0 0 8px rgba(251,191,36,.35)}
+.evt.retired{opacity:.55}
+.evt.retired .evt-spine{background:var(--then);box-shadow:none}
+.evt.read .evt-spine{background:var(--g-knowledge)}
+.evt.write .evt-spine{background:var(--g-decisions)}
+.evt.failed .evt-spine{background:var(--red)}
+.evt-1{font-size:12.5px;color:var(--ink2);line-height:1.5;word-break:break-word}
+.evt-1 b{color:var(--ink);font-weight:600}
+.evt-1 .pred{color:var(--muted)}
+.evt-1 .arrow{color:var(--muted);padding:0 2px}
+.evt-2{margin-top:5px;display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2);font-size:10.5px;color:var(--muted)}
+.evt-tag{font-size:9px;letter-spacing:.07em;text-transform:uppercase;border:1px solid var(--line);
+  border-radius:6px;padding:1px 6px;color:var(--muted)}
+.evt-by{color:var(--g-meta);font-family:ui-monospace,Menlo,monospace;max-width:280px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.evt-why{font-size:11px;color:var(--muted);margin-top:4px;line-height:1.5;padding-left:var(--s2);
+  border-left:1px solid var(--line2)}
+/* the validity window — the signature chip: how long this was, or still is, true */
+.win{font-family:ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;font-size:10px;
+  padding:2px 7px;border-radius:6px;white-space:nowrap;
+  background:rgba(62,230,208,.09);color:var(--now);border:1px solid rgba(62,230,208,.18)}
+.win.closed{background:rgba(199,146,234,.10);color:var(--then);border-color:rgba(199,146,234,.2)}
+.win.none{background:rgba(255,255,255,.045);color:var(--muted);border-color:var(--line)}
+.act-empty{color:var(--muted);font-size:12px;padding:var(--s7) 0;text-align:center;line-height:1.8}
+
+/* ---- health ---- */
+.gauges{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:var(--s4);
+  margin-bottom:var(--s5)}
+.gauge{padding:var(--s4);border:1px solid var(--line);border-radius:var(--r-lg);
+  background:linear-gradient(180deg,var(--panel2),rgba(14,19,30,.4));box-shadow:var(--frost)}
+.gauge .lb{font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted)}
+.gauge .big{font-size:30px;font-weight:600;line-height:1.1;margin-top:var(--s2);
+  font-family:ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.gauge .big .of{font-size:14px;color:var(--muted);font-weight:400}
+.gauge .cap{font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5;text-wrap:pretty}
+.gauge.now .big{color:var(--now)}
+.gauge.warn .big{color:var(--amber)}
+.gauge.clear .big{color:var(--green)}
+/* split bar: true-now vs history, bi-temporality made visible */
+.split{display:flex;height:8px;border-radius:var(--r-pill);overflow:hidden;margin-top:var(--s3);
+  background:rgba(255,255,255,.05)}
+.split i{display:block;height:100%}
+.split .a{background:linear-gradient(90deg,rgba(62,230,208,.65),var(--now))}
+.split .b{background:rgba(199,146,234,.42)}
+.slegend{display:flex;gap:var(--s3);margin-top:7px;font-size:10px;color:var(--muted)}
+.slegend .k{display:flex;align-items:center;gap:5px}
+.slegend .k i{width:7px;height:7px;border-radius:2px;display:block}
+/* ticks: one mark per finding — a count you can see, not just read */
+.ticks{display:flex;flex-wrap:wrap;gap:3px;margin-top:var(--s3);min-height:14px;align-items:center}
+.ticks i{width:3px;height:14px;border-radius:2px;background:var(--amber);opacity:.85;display:block}
+.ticks.red i{background:var(--red)}
+.ticks .none{font-size:10.5px;color:var(--muted);letter-spacing:.06em}
+.verdict{display:flex;align-items:center;gap:var(--s3);padding:var(--s3) var(--s4);border-radius:var(--r-md);
+  font-size:12.5px;margin-bottom:var(--s4);border:1px solid var(--line);background:rgba(255,255,255,.03)}
+.verdict.clean{border-color:rgba(52,211,153,.28);background:rgba(52,211,153,.08);color:var(--green)}
+.verdict.look{border-color:rgba(251,191,36,.3);background:rgba(251,191,36,.08);color:var(--amber)}
+.verdict .vk{font-weight:650;letter-spacing:.01em}
+.verdict .vd{color:var(--ink2);font-weight:400}
+.hsec{margin-top:var(--s5)}
+.hsec h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
+  display:flex;align-items:center;gap:var(--s3);margin-bottom:var(--s2)}
+.hsec h3 .ln{flex:1;height:1px;background:var(--line2)}
+.hsec h3 .ct{font-family:ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;letter-spacing:0}
+.hrow{display:grid;grid-template-columns:2px minmax(0,1fr);gap:var(--s3);padding:9px 0;
+  border-bottom:1px solid var(--line2);font-size:12.5px;color:var(--ink2);line-height:1.55}
+.hrow .sp{border-radius:2px;background:var(--amber)}
+.hrow.contra .sp{background:var(--red)}
+.hrow .txt{word-break:break-word}
+.hnone{font-size:12px;color:var(--muted);padding:var(--s3) 0 var(--s4);line-height:1.6;text-wrap:pretty}
+.notice{padding:var(--s4);border-radius:var(--r-md);border:1px solid rgba(251,191,36,.34);
+  background:rgba(251,191,36,.09);color:var(--amber);font-size:12.5px;line-height:1.6;white-space:pre-wrap;
+  word-break:break-word}
+.hmeta{margin-top:var(--s6);padding-top:var(--s3);border-top:1px solid var(--line2);
+  font-size:10.5px;color:var(--muted);line-height:1.7;word-break:break-all}
+
+/* ---- Overnight: the 4am agents' digests, read like a briefing ---- */
+.ovday{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
+  display:flex;align-items:center;gap:var(--s3);margin:var(--s5) 0 var(--s3)}
+.ovday .ln{flex:1;height:1px;background:var(--line2)}
+.ovday .today{color:var(--now);letter-spacing:.06em;text-transform:none;font-size:10.5px}
+.ovcard{border:1px solid var(--line);border-radius:var(--r-md);background:rgba(255,255,255,.03);
+  padding:var(--s4);margin-bottom:var(--s3)}
+.ovcard.run{border-color:rgba(62,230,208,.3);background:rgba(62,230,208,.055)}
+.ovcard h4{font-size:13px;font-weight:620;color:var(--ink);line-height:1.45;margin:0 0 6px;
+  display:flex;align-items:flex-start;gap:var(--s3);text-wrap:pretty}
+.ovcard h4 .ht{flex:1;min-width:0;word-break:break-word}
+.lane{flex:none;font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;padding:3px 7px;
+  border-radius:var(--r-pill);border:1px solid var(--line);color:var(--muted);white-space:nowrap;margin-top:1px}
+.lane.applications{border-color:rgba(74,222,128,.4);color:var(--green)}
+.lane.seenjobs{border-color:rgba(199,146,234,.45);color:#c792ea}
+.ovcard .bd{font-size:12.5px;color:var(--ink2);line-height:1.62;white-space:pre-wrap;
+  word-break:break-word;text-wrap:pretty}
+.ovcard .bd.clip{max-height:8.6em;overflow:hidden;
+  mask-image:linear-gradient(180deg,#000 68%,transparent);-webkit-mask-image:linear-gradient(180deg,#000 68%,transparent)}
+.ovmore{margin-top:7px;font-size:11px;color:var(--now);background:none;border:0;padding:0;cursor:pointer;
+  font-family:inherit;letter-spacing:.02em}
+.ovmore:hover{text-decoration:underline}
+
+/* ---- tooltip ---- */
+.tip{position:fixed;z-index:60;max-width:270px;pointer-events:none;opacity:0;transition:opacity .12s;
+  background:rgba(9,13,20,.97);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 11px;
+  font-size:12px;box-shadow:0 14px 40px rgba(0,0,0,.55),var(--frost)}
+.tip.on{opacity:1}
+.tip .t-t{font-weight:650;margin-bottom:3px;word-break:break-word}
+.tip .t-s{color:var(--muted);font-size:11px}
+
+/* graph-only chrome hides itself on the reading views */
+body:not([data-view="graph"]) .only-graph{display:none}
+
+/* ---- widths: trim from the outside in, so nothing ever wraps ---- */
+@media (max-width:1180px){
+  .crumb{display:none}
+  /* visibility, not display: .ends is a 3-column grid and a removed item would re-flow the others */
+  .ends .mid{visibility:hidden}
+  .search input{width:clamp(120px,18vw,200px)}
+}
+@media (max-width:1000px){
+  :root{--rail:64px;--nav-w:52px}
+  .navitem .ni-label{display:none}
+  .rail-foot{padding-left:9px}
+  .pane-in{padding:var(--s4) var(--s4) var(--s6)}
+  .dock{padding:var(--s3) var(--s4)}
+  .head{padding:0 var(--s4)}
+  .strip{padding:0 var(--s4);gap:var(--s3)}
+}
+</style>
+</head>
+<body data-view="graph">
+<div class="aurora" aria-hidden="true"></div>
+
+<div class="app">
+  <!-- ---------- rail: the three views, strung on one spine ---------- -->
+  <nav class="rail" aria-label="Views">
+    <div class="mark"><i>◈</i></div>
+    <div class="rail-nav" id="rail-nav">
+      <button class="navitem on" data-view="graph" aria-current="page" title="Graph — the unified memory graph (⌘1)">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+          <path d="M8.2 15.4 13 8.8M15.4 9.6 16.6 16.3M8.6 17.4 14.4 18.6"/>
+          <circle cx="6.4" cy="16.6" r="2.3"/><circle cx="17" cy="18.9" r="1.9"/><circle cx="14.4" cy="6.9" r="2.5"/>
+        </svg>
+        <span class="ni-label">Graph</span>
+      </button>
+      <button class="navitem" data-view="activity" title="Brain activity — every write and every request (⌘2)">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+          <path d="M4 6.5h11M4 12h7.5M4 17.5h14"/>
+          <circle cx="18.6" cy="6.5" r="1.5" fill="currentColor" stroke="none"/>
+          <circle cx="14.6" cy="12" r="1.5" fill="currentColor" stroke="none"/>
+        </svg>
+        <span class="ni-label">Activity</span>
+      </button>
+      <button class="navitem" data-view="overnight" title="Overnight — what the 4am agents did while you slept (⌘3)">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20 14.6A8.2 8.2 0 1 1 9.4 4a6.6 6.6 0 0 0 10.6 10.6Z"/>
+        </svg>
+        <span class="ni-label">Overnight</span>
+      </button>
+      <button class="navitem" data-view="health" title="Health — the Keeper's audit of the brain (⌘4)">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+          <path d="M3 13.4h3.3l1.9-5.6 3 11.2 2.4-8 1.7 4.1H21"/>
+        </svg>
+        <span class="ni-label">Health</span>
+      </button>
+      <button class="navitem" data-view="access" title="Access — authenticated Brain clients (⌘5)">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="12" r="3"/><path d="M11 12h10M17 12v3M20 12v2"/></svg>
+        <span class="ni-label">Access</span>
+      </button>
+    </div>
+    <div class="rail-foot" title="Teal is what is still true; violet is what was true and is kept as history.">
+      <span><i class="k-now"></i>now</span>
+      <span><i class="k-then"></i>then</span>
+    </div>
+  </nav>
+
+  <!-- ---------- header ---------- -->
+  <header class="head">
+    <div class="hd-left">
+      <b class="wordmark">Chronos</b>
+      <span class="ver mono" id="hd-ver">—</span>
+      <span class="crumb" id="hd-crumb">Graph</span>
+    </div>
+    <div class="hd-right">
+      <label class="search">
+        <span class="ic" aria-hidden="true">⌕</span>
+        <input id="search" placeholder="Search facts, entities, threads…" autocomplete="off" aria-label="Search the graph" />
+        <span class="cnt" id="search-cnt"></span>
+      </label>
+      <button class="ghost only-graph" id="recenter-btn" title="Fit the whole graph back in view (F, or double-click the canvas)">⌖ recenter</button>
+      <span class="pill live" id="live-pill">live</span>
+    </div>
+  </header>
+
+  <!-- ---------- views ---------- -->
+  <main class="views">
+
+    <!-- GRAPH: notice row / canvas stage / timeline dock -->
+    <section class="view on" id="view-graph" aria-label="Graph">
+      <div class="banner" id="banner"></div>
+
+      <div class="stage" id="stage">
+        <canvas id="cv"></canvas>
+
+        <div class="controls glass">
+          <h4>Brains</h4>
+          <div class="chips" id="origin-chips">
+            <div class="chip on" data-origin="chronos"><span class="sw" style="background:var(--now)"></span>Chronos vault</div>
+            <div class="chip on" data-origin="command"><span class="sw" style="background:#5b8cff"></span>Seen Command</div>
+            <div class="chip on" data-origin="live"><span class="sw" style="background:#22d3ee"></span>Live (Supabase/GitHub)</div>
+            <div class="chip on" data-origin="bridge"><span class="sw" style="background:#e9edf6"></span>Bridges</div>
+          </div>
+
+          <h4>Node types</h4>
+          <div class="legend" id="legend"></div>
+
+          <h4>Shape = origin</h4>
+          <div class="shape-key">
+            <div><span class="mk c"></span>Chronos (temporal facts)</div>
+            <div><span class="mk s"></span>Command (current state)</div>
+          </div>
+
+          <h4>Temporal</h4>
+          <label class="tg"><input type="checkbox" id="t-expired" />Show superseded facts</label>
+        </div>
+
+        <aside class="detail glass" id="detail" aria-label="Node detail">
+          <div class="d-head">
+            <div class="d-badges" id="d-badges"></div>
+            <div class="d-title" id="d-title">—</div>
+            <button class="d-close" id="d-close" aria-label="Close">✕</button>
+          </div>
+          <div class="d-body" id="d-body"></div>
+        </aside>
+
+        <div class="hint">scroll to zoom · drag background to pan · drag a node · click to inspect</div>
+      </div>
+
+      <div class="dock">
+        <div class="dock-top">
+          <button class="play" id="play" aria-label="Play timeline">▶</button>
+          <div class="readout">
+            <div class="ro-date mono" id="date">—</div>
+            <div class="ro-sub"><b id="c-act">0</b> true now · <span class="exp" id="c-exp">0</span> superseded ·
+              <span id="c-fut">0</span> not yet known</div>
+          </div>
+          <div class="spans" id="zoom">
+            <button data-span="day">Day</button><button data-span="week">Week</button><button data-span="month">Month</button><button data-span="all" class="on">All</button>
+          </div>
+          <button class="ghost" id="now-btn" title="Jump to the newest stamp">now ⏱</button>
+        </div>
+        <div class="track" id="track">
+          <div class="track-bed"></div>
+          <div class="track-fill"></div>
+          <input type="range" id="slider" min="0" max="1000" value="1000" aria-label="Travel through time" />
+        </div>
+        <div class="ends mono">
+          <span id="d-from">—</span>
+          <span class="mid">◀ drag to travel through time ▶</span>
+          <span class="to" id="d-to">—</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- BRAIN ACTIVITY -->
+    <section class="view" id="view-activity" aria-label="Brain activity">
+      <div class="pane">
+        <div class="pane-in">
+          <div class="vhead">
+            <div>
+              <h1>Brain activity</h1>
+              <p class="vsub" id="act-sub">reading the vault…</p>
+            </div>
+            <div class="acts"><button class="ghost" id="act-refresh">re-read vault</button></div>
+          </div>
+          <div class="segs" id="act-tabs">
+            <button class="act-tab on" data-sec="recent">Latest changes<span class="n" id="act-n-recent"></span></button>
+            <button class="act-tab" data-sec="all">All changes<span class="n" id="act-n-all"></span></button>
+            <button class="act-tab" data-sec="requests">AI traffic<span class="n" id="act-n-req"></span></button>
+          </div>
+          <div id="act-body"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- HEALTH -->
+    <section class="view" id="view-overnight" aria-label="Overnight">
+      <div class="pane">
+        <div class="pane-in">
+          <div class="vhead">
+            <div>
+              <h1>Overnight</h1>
+              <p class="vsub" id="ov-sub">reading the vault…</p>
+            </div>
+            <div class="acts"><button class="ghost" id="ov-refresh">re-read vault</button></div>
+          </div>
+          <div id="ov-body"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="view-health" aria-label="Health">
+      <div class="pane">
+        <div class="pane-in">
+          <div class="vhead">
+            <div>
+              <h1>Health</h1>
+              <p class="vsub">The Keeper reads the whole brain at once and reports what does not hold
+                up — facts that contradict each other, and open facts nothing has refreshed.</p>
+            </div>
+            <div class="acts"><button class="ghost" id="hl-refresh">re-run audit</button></div>
+          </div>
+          <div id="hl-body"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="view-access" aria-label="Access settings">
+      <div class="pane"><div class="pane-in">
+        <div class="vhead"><div><h1>Brain access</h1><p class="vsub">Credentials—not claimed names—control identity. Secrets are shown once or installed securely; Chronos stores only non-reusable lookup and verifier values.</p></div><div class="acts"><button class="ghost" id="ac-refresh">refresh</button></div></div>
+        <div class="notice" style="margin-bottom:18px">Create one credential per source. Give only that source its secret. Rotation replaces the current credential in this list; explicit revocations stay visible in their own section.</div>
+        <div class="glass" style="position:relative;padding:18px;margin-bottom:18px">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <input id="ac-name" placeholder="client name, e.g. codex" style="background:#0a101c;color:var(--ink);border:1px solid var(--line2);border-radius:8px;padding:9px 11px;min-width:240px">
+            <label class="tg"><input type="checkbox" id="ac-read" checked>read</label>
+            <label class="tg"><input type="checkbox" id="ac-write">write</label>
+            <label class="tg"><input type="checkbox" id="ac-artifact-read">receive files</label>
+            <label class="tg"><input type="checkbox" id="ac-artifact-write">send files</label>
+            <label class="tg"><input type="checkbox" id="ac-github">GitHub PRs</label>
+            <label class="tg"><input type="checkbox" id="ac-admin">admin</label>
+            <select id="ac-ttl" aria-label="Credential lifetime" style="background:#0a101c;color:var(--ink);border:1px solid var(--line2);border-radius:8px;padding:9px 11px">
+              <option value="24">expires in 24 hours</option><option value="168">expires in 7 days</option>
+              <option value="720" selected>expires in 30 days</option><option value="">no expiry</option>
+            </select>
+            <label class="tg"><input type="checkbox" id="ac-install" checked>install on this Mac</label>
+            <button class="ghost" id="ac-issue">issue credential</button>
+          </div>
+          <div id="ac-secret" style="display:none;margin-top:14px"></div>
+        </div>
+        <div id="ac-body"></div>
+      </div></div>
+    </section>
+
+  </main>
+
+  <!-- ---------- status strip: honest state, always visible ---------- -->
+  <footer class="strip mono">
+    <span class="st"><b id="s-nodes">0</b> nodes</span>
+    <span class="st"><b id="s-links">0</b> links</span>
+    <span class="st"><b id="s-bridge">0</b> bridges</span>
+    <span class="sep"></span>
+    <span class="st shrink" id="st-vault"><span class="dotk"></span>vault —</span>
+    <span class="st" id="st-state"><span class="dotk"></span>state —</span>
+    <span class="sep"></span>
+    <span class="st" id="st-updated">updated —</span>
+    <span class="st push" id="st-ver"></span>
+  </footer>
+</div>
+
+<div class="tip" id="tip"></div>
+<script>
+"use strict";
+// ---- palette ----
+const GC = { knowledge:"#5b8cff", timeline:"#c792ea", decisions:"#ffb454", people:"#ff6b8b",
+  meta:"#3ee6d0", entity:"#7ee0c0", value:"#6b7689", "cmd-entity":"#e9edf6", "cmd-value":"#8391a8",
+  "live-entity":"#22d3ee", "live-value":"#67e8f9", "live-branch":"#a78bfa", "live-pr":"#f0abfc" };
+const DEPT = { growth:"#5b8cff", product:"#c792ea", reliability:"#3ee6d0", revenue:"#ffb454",
+  data:"#ff6b8b", strategy:"#e879f9", platform:"#4ade80", command:"#e9edf6" };
+// node-type families for the legend/filter (group -> family)
+const FAM = { knowledge:"knowledge", timeline:"timeline", decisions:"decisions", people:"people",
+  meta:"meta", entity:"entities", value:"values", "cmd-entity":"entities", "cmd-value":"values",
+  thread:"threads", dept:"depts",
+  "live-entity":"live", "live-value":"live", "live-branch":"repo", "live-pr":"repo" };
+const LEGEND = [
+  { fam:"knowledge", label:"Knowledge", color:GC.knowledge },
+  { fam:"timeline",  label:"Timeline",  color:GC.timeline },
+  { fam:"decisions", label:"Decisions", color:GC.decisions },
+  { fam:"people",    label:"People",    color:GC.people },
+  { fam:"meta",      label:"Meta / system", color:GC.meta },
+  { fam:"entities",  label:"Entities",  color:GC.entity },
+  { fam:"values",    label:"Facts / values", color:GC.value },
+  { fam:"threads",   label:"Work threads", color:"#ffb454" },
+  { fam:"depts",     label:"Departments", color:"#4ade80" },
+  { fam:"live",      label:"Live data (Supabase)", color:GC["live-entity"] },
+  { fam:"repo",      label:"GitHub branches / PRs", color:GC["live-branch"] },
+];
+
+// ---- state ----
+let GRAPH = null, SOURCES = null, lastUpdated = "", pushes = 0;
+let nodes = [], links = [], byId = {}, neigh = {};
+const pos = new Map();               // id -> {x,y} preserved across live updates
+const originOn = { chronos:true, command:true, bridge:true, live:true };
+const groupOn = {}; LEGEND.forEach(function(l){ groupOn[l.fam] = true; });
+let showExpired = false;
+let query = "", matchIds = new Set();
+let curDate = "", fromMsV = 0, toMsV = 1;
+let selected = null, hoverNode = null;
+let playing = false, playTimer = null;
+let firstFit = false;
+
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+const stage = document.getElementById("stage");
+const tip = document.getElementById("tip");
+let W = 0, H = 0, dpr = Math.min(window.devicePixelRatio || 1, 2);
+let cvLeft = 0, cvTop = 0;           // canvas origin in client coords (the shell offsets it now)
+let alpha = 1;
+const view = { x: 0, y: 0, k: 1 };   // pan (x,y in CSS px) + zoom (k)
+
+// ---- date helpers (ISO strings sort lexicographically) ----
+// Dates are MINUTE-precision ISO strings ("YYYY-MM-DDTHH:MM"); plain day strings still parse (midnight).
+// Mixed granularity compares correctly as strings: "2026-07-10" <= "2026-07-10T22:14".
+function toMs(d){ const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/);
+  if (!m) return 0;
+  return Date.UTC(+m[1], +m[2]-1, +m[3], +(m[4]||0), +(m[5]||0)); }
+function fromMs(ms){ const d = new Date(ms); const z = function(x){ return (x<10?"0":"")+x; };
+  return d.getUTCFullYear()+"-"+z(d.getUTCMonth()+1)+"-"+z(d.getUTCDate())+"T"+z(d.getUTCHours())+":"+z(d.getUTCMinutes()); }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, function(c){
+  return ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]; }); }
+
+// ---- temporal ----
+function factStateAt(l, date){
+  if (l.kind !== "fact") return "active";
+  if (!l.valid_from) return "active";              // command facts: always current
+  if (l.valid_from > date) return "future";
+  if (l.valid_to && date >= l.valid_to) return "expired";
+  return "active";
+}
+
+// ---- visibility ----
+function nodeVisible(n){
+  if (!originOn[n.origin]) return false;
+  const fam = FAM[n.group] || "meta";
+  return !!groupOn[fam];
+}
+function linkVisible(l){
+  if (l.kind === "bridge") return originOn.bridge && vis[l.source] && vis[l.target];
+  if (!vis[l.source] || !vis[l.target]) return false;
+  if (l.kind === "fact"){
+    const st = factStateAt(l, curDate);
+    if (st === "future") return false;
+    if (st === "expired") return showExpired;
+    return true;
+  }
+  if (l.kind === "work"){ return !(l.valid_from && l.valid_from > curDate); } // command work scrubs in at its run date
+  return true; // wiki-link
+}
+let vis = {};
+function computeVisible(){
+  vis = {};
+  for (let i=0;i<nodes.length;i++){ if (nodeVisible(nodes[i])) vis[nodes[i].id] = 1; }
+  // Count incident links that are ACTUALLY visible at the current date, then hide any data node left
+  // with none — so scrubbing genuinely grows/collapses the graph over time (facts, values, entities,
+  // and the whole command layer fade in at their dates) instead of leaving a frozen skeleton.
+  const inc = {};
+  for (let j=0;j<links.length;j++){ const l = links[j];
+    if (l.kind === "fact"){ const st = factStateAt(l, curDate);
+      if (st === "future") continue; if (st === "expired" && !showExpired) continue; }
+    if (l.kind === "work" && l.valid_from && l.valid_from > curDate) continue;
+    if (l.kind === "bridge" && !originOn.bridge) continue;
+    inc[l.source] = 1; inc[l.target] = 1;
+  }
+  const PRUNE = { value:1, entity:1, thread:1, dept:1 }; // notes persist (knowledge skeleton); these fade with their links
+  for (const n of nodes){ if (PRUNE[n.type] && !inc[n.id]) delete vis[n.id]; }
+  return vis;
+}
+
+// ---- colors / geometry ----
+function nodeColor(n){
+  if (n.type === "dept") return DEPT[n.label] || "#4ade80";
+  if (n.type === "thread") return DEPT[(n.meta && n.meta.area)] || "#ffb454";
+  return GC[n.group] || "#8b94a7";
+}
+function radius(n){
+  if (n.type === "value") return 3.4;
+  if (n.type === "entity") return 5;
+  if (n.type === "dept") return 6.5;
+  if (n.type === "thread") return 4.6;
+  return 4.5 + Math.min(n.degree||0, 10) * 0.85; // note
+}
+
+// ---- ingest a graph payload (initial + live updates), preserving positions ----
+function apply(data){
+  GRAPH = data;
+  // banner / source status — a REAL row, so it pushes the canvas down instead of covering it
+  const banner = document.getElementById("banner");
+  if (data.error){ banner.className = "banner on"; banner.textContent = "Graph error: " + data.error; }
+  else if (!data.vaultFound){ banner.className = "banner on";
+    banner.textContent = "Chronos vault not found — showing Seen Command only. Set CHRONOS_VAULT to point at seen/memory."; }
+  else if (!data.stateFound){ banner.className = "banner on";
+    banner.textContent = "data/state.json not found — run a board meeting (npm run brief) to populate the Command graph."; }
+  else banner.className = "banner";
+  resize(); // the notice row changes the stage height
+
+  const cx = W/2, cy = H/2;
+  nodes = (data.nodes||[]).map(function(n, i){
+    let p = pos.get(n.id);
+    if (!p){ const a = i*2.399963, r = 40 + Math.sqrt(i)*30; p = { x: cx+Math.cos(a)*r, y: cy+Math.sin(a)*r }; pos.set(n.id, p); }
+    return Object.assign({}, n, { x: p.x, y: p.y, vx: 0, vy: 0 });
+  });
+  byId = {}; nodes.forEach(function(n){ byId[n.id] = n; });
+  links = (data.links||[]).filter(function(l){ return byId[l.source] && byId[l.target]; });
+  neigh = {};
+  links.forEach(function(l){ (neigh[l.source]=neigh[l.source]||{})[l.target]=1; (neigh[l.target]=neigh[l.target]||{})[l.source]=1; });
+  // prune stale preserved positions
+  const live = new Set(nodes.map(function(n){ return n.id; }));
+  for (const k of Array.from(pos.keys())){ if (!live.has(k)) pos.delete(k); }
+
+  // status strip — counts + when this payload actually arrived
+  lastUpdated = new Date().toTimeString().slice(0,8);
+  renderStrip();
+
+  // time range: remember the FULL span, then apply the active zoom window onto it
+  const dr = data.dateRange || { from: data.generated, to: data.generated };
+  fullFromMs = toMs(dr.from); fullToMs = toMs(dr.to); if (fullToMs <= fullFromMs) fullToMs = fullFromMs + 86400000;
+  if (!curDate) curDate = dr.to;
+  applyZoom(true);
+
+  renderLegend();
+  applySearch();
+  if (selected && !byId[selected.id]){ selected = null; closeDetail(); }
+  else if (selected){ selected = byId[selected.id]; renderDetail(selected); }
+  alpha = Math.max(alpha, 0.5);
+
+  // A live push is a real event — let the pill register it (but not on the very first payload).
+  if (pushes++ > 0){ const p = document.getElementById("live-pill");
+    p.classList.add("beat"); setTimeout(function(){ p.classList.remove("beat"); }, 700); }
+
+  // On the very first payload, let the force sim cool, then frame the whole graph once. Live
+  // updates afterward leave the user's pan/zoom untouched.
+  if (!firstFit){ firstFit = true; setTimeout(fitView, 1300); }
+}
+
+// ---- status strip: nodes/links/bridges, both stores, last update ----
+function renderStrip(){
+  const c = (GRAPH && GRAPH.counts) || {}, t = c.total || {};
+  document.getElementById("s-nodes").textContent = t.nodes != null ? t.nodes : 0;
+  document.getElementById("s-links").textContent = t.links != null ? t.links : 0;
+  document.getElementById("s-bridge").textContent = c.bridges != null ? c.bridges : 0;
+
+  const vaultPath = (SOURCES && SOURCES.vaultPath) || (GRAPH && GRAPH.sources && GRAPH.sources.vaultPath) || "";
+  const statePath = (SOURCES && SOURCES.statePath) || (GRAPH && GRAPH.sources && GRAPH.sources.statePath) || "";
+  const vOk = GRAPH ? !!GRAPH.vaultFound : !!(SOURCES && SOURCES.vaultFound);
+  const sOk = GRAPH ? !!GRAPH.stateFound : !!(SOURCES && SOURCES.stateFound);
+
+  const vEl = document.getElementById("st-vault");
+  vEl.innerHTML = '<span class="dotk ' + (vOk ? "ok" : "miss") + '"></span>vault ' +
+    (vOk ? esc(shortPath(vaultPath)) : "not found");
+  vEl.title = vaultPath ? "Chronos vault: " + vaultPath : "Chronos vault not found";
+
+  const sEl = document.getElementById("st-state");
+  sEl.innerHTML = '<span class="dotk ' + (sOk ? "ok" : "miss") + '"></span>state ' + (sOk ? "found" : "not found");
+  sEl.title = statePath ? "Seen Command state: " + statePath : "data/state.json not found";
+
+  document.getElementById("st-updated").textContent = lastUpdated ? "updated " + lastUpdated : "updated —";
+  document.getElementById("st-ver").textContent = (SOURCES && SOURCES.version) ? SOURCES.version : "";
+}
+function shortPath(p){
+  const parts = String(p||"").split("/").filter(Boolean);
+  if (!parts.length) return "—";
+  return (parts.length > 2 ? "…/" : "/") + parts.slice(-2).join("/");
+}
+
+// ---- legend (also the group filter), with live per-family counts ----
+function renderLegend(){
+  const el = document.getElementById("legend");
+  const counts = {}; LEGEND.forEach(function(l){ counts[l.fam] = 0; });
+  nodes.forEach(function(n){ const f = FAM[n.group]; if (f!=null && counts[f]!=null) counts[f]++; });
+  el.innerHTML = "";
+  LEGEND.forEach(function(l){
+    if (!counts[l.fam]) return;
+    const row = document.createElement("div");
+    row.className = "row" + (groupOn[l.fam] ? "" : " off");
+    row.innerHTML = '<span class="dot" style="color:'+l.color+';background:'+l.color+'"></span>'+esc(l.label)+'<span class="n">'+counts[l.fam]+'</span>';
+    row.onclick = function(){ groupOn[l.fam] = !groupOn[l.fam]; renderLegend(); alpha = Math.max(alpha,0.3); };
+    el.appendChild(row);
+  });
+}
+
+// ---- search: highlight matches, dim the rest (always over the graph) ----
+function applySearch(){
+  matchIds = new Set();
+  const q = query.trim().toLowerCase();
+  const cnt = document.getElementById("search-cnt");
+  if (!q){ cnt.textContent = ""; return; }
+  const terms = q.split(/\s+/).filter(Boolean);
+  nodes.forEach(function(n){
+    let hay = String(n.label).toLowerCase();
+    if (n.facts) n.facts.forEach(function(f){ hay += " " + f.subject + " " + f.predicate + " " + f.object; });
+    if (n.meta) hay += " " + Object.values(n.meta).join(" ").toLowerCase();
+    if (terms.every(function(t){ return hay.indexOf(t) >= 0; })) matchIds.add(n.id);
+  });
+  cnt.textContent = matchIds.size + " hit" + (matchIds.size===1?"":"s");
+}
+
+// ---- physics (unchanged: same forces, same constants) ----
+function tick(){
+  computeVisible();
+  const k = 0.9;
+  for (let i=0;i<nodes.length;i++){ const a = nodes[i]; if (!vis[a.id]) continue;
+    for (let j=i+1;j<nodes.length;j++){ const b = nodes[j]; if (!vis[b.id]) continue;
+      let dx = a.x-b.x, dy = a.y-b.y, d2 = dx*dx+dy*dy || 0.01; if (d2 > 90000) continue;
+      const d = Math.sqrt(d2), f = 1400/d2, fx = dx/d*f, fy = dy/d*f;
+      a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy; } }
+  for (let m=0;m<links.length;m++){ const L = links[m]; if (!linkVisible(L)) continue;
+    const s = byId[L.source], t = byId[L.target];
+    const dist = L.kind === "link" ? 74 : (L.kind === "bridge" ? 120 : 34);
+    let dx = t.x-s.x, dy = t.y-s.y, d = Math.sqrt(dx*dx+dy*dy) || 0.01, f = (d-dist)*0.02;
+    const fx = dx/d*f, fy = dy/d*f; s.vx += fx; s.vy += fy; t.vx -= fx; t.vy -= fy; }
+  const cx = W/2, cy = H/2;
+  for (let p=0;p<nodes.length;p++){ const n = nodes[p]; if (!vis[n.id]) continue; if (n === dragNode) continue;
+    n.vx += (cx-n.x)*0.0015; n.vy += (cy-n.y)*0.0015; n.vx *= k; n.vy *= k;
+    n.x += n.vx*alpha*2; n.y += n.vy*alpha*2; }
+  alpha *= 0.985; if (alpha < 0.02) alpha = 0.02;
+}
+
+function isNeighbor(a, b){ return neigh[a.id] && neigh[a.id][b.id]; }
+
+function draw(){
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+  ctx.save();
+  ctx.translate(view.x, view.y); ctx.scale(view.k, view.k);
+  computeVisible();
+  const focus = hoverNode || selected;
+  const searchActive = matchIds.size > 0;
+
+  // links
+  for (let i=0;i<links.length;i++){ const L = links[i]; if (!linkVisible(L)) continue;
+    const s = byId[L.source], t = byId[L.target];
+    const foc = focus && (L.source===focus.id || L.target===focus.id);
+    ctx.setLineDash(L.kind === "bridge" ? [4,4] : []);
+    if (L.kind === "bridge"){ ctx.strokeStyle = foc ? "rgba(233,237,246,.8)" : "rgba(233,237,246,.28)"; ctx.lineWidth = foc?1.6:1; }
+    else if (L.kind === "fact"){ const st = factStateAt(L, curDate);
+      // superseded facts stay on screen as HISTORY — drawn in the "then" violet, never the "now" teal
+      if (st === "expired"){ ctx.strokeStyle = "rgba(199,146,234,.34)"; ctx.lineWidth = 0.9; }
+      else { const c = L.origin === "command" ? "91,140,255" : "62,230,208";
+        ctx.strokeStyle = foc ? "rgba("+c+",.95)" : "rgba("+c+",.4)"; ctx.lineWidth = foc?1.8:1.1; } }
+    else if (L.kind === "work"){ ctx.strokeStyle = foc ? "rgba(255,180,84,.9)" : "rgba(255,180,84,.28)"; ctx.lineWidth = foc?1.6:1; }
+    else { ctx.strokeStyle = foc ? "rgba(233,237,246,.5)" : "rgba(255,255,255,.07)"; ctx.lineWidth = foc?1.4:0.8; }
+    ctx.beginPath(); ctx.moveTo(s.x,s.y); ctx.lineTo(t.x,t.y); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  // nodes
+  for (let n2=0;n2<nodes.length;n2++){ const n = nodes[n2]; if (!vis[n.id]) continue;
+    const col = nodeColor(n), r = radius(n);
+    let dim = focus && focus!==n && !isNeighbor(focus, n);
+    if (searchActive){ dim = dim || !matchIds.has(n.id); }
+    const isMatch = searchActive && matchIds.has(n.id);
+    ctx.globalAlpha = dim ? 0.18 : 1;
+    ctx.beginPath();
+    if (n.origin === "command"){ // rounded square
+      const s = r*1.7; roundRect(ctx, n.x-s/2, n.y-s/2, s, s, Math.min(3, s/3));
+    } else { ctx.arc(n.x, n.y, r, 0, 6.2832); }
+    ctx.fillStyle = col;
+    if (!dim){ ctx.shadowColor = col; ctx.shadowBlur = isMatch ? 18 : (n.type==="value"?5:11); }
+    ctx.fill(); ctx.shadowBlur = 0;
+    if (isMatch){ ctx.lineWidth = 1.4; ctx.strokeStyle = "#fff"; ctx.stroke(); }
+    if (focus === n || selected === n){ ctx.lineWidth = 1.6; ctx.strokeStyle = "rgba(255,255,255,.9)"; ctx.stroke(); }
+    // labels
+    const showLabel = (n.type!=="value") && ((n.degree||0) >= 4 || n===focus || n===selected || isMatch || n.type==="dept");
+    if (showLabel){ ctx.globalAlpha = dim?0.3:0.95; ctx.fillStyle = "#cfd6e6";
+      ctx.font = "11px ui-monospace,Menlo,monospace";
+      const lbl = n.label.length>24 ? n.label.slice(0,23)+"…" : n.label;
+      ctx.fillText(lbl, n.x + r + 4, n.y + 3.5); }
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+function roundRect(c,x,y,w,h,r){ c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r);
+  c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); }
+
+// The canvas is a pane inside the shell now, so only the active view needs to be drawn.
+function loop(){ if (currentView === "graph"){ tick(); draw(); } requestAnimationFrame(loop); }
+
+// ---- canvas / coordinate transforms ----
+// The canvas no longer fills the window: it fills the graph stage. Measure that, and keep its client
+// origin so pointer coords can be made canvas-relative.
+function resize(){
+  const r = stage.getBoundingClientRect();
+  cvLeft = r.left; cvTop = r.top;
+  W = Math.max(1, Math.round(r.width)); H = Math.max(1, Math.round(r.height));
+  cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
+  cv.style.width = W+"px"; cv.style.height = H+"px";
+}
+window.addEventListener("resize", function(){ resize(); alpha = Math.max(alpha,0.3); });
+// The canvas fills a GRID PANE, and a pane changes size for reasons a window-resize event never sees:
+// the notice row appearing, the rail narrowing at a breakpoint, or a first layout that had not settled
+// when the script ran (which left the canvas stale-sized until you touched the window). Observe the
+// stage itself — it fires once on observe, so the first measurement is always the real one.
+if (window.ResizeObserver){
+  new ResizeObserver(function(){ resize(); alpha = Math.max(alpha, 0.2); }).observe(stage);
+}
+function toWorld(mx, my){ return { x: (mx - view.x)/view.k, y: (my - view.y)/view.k }; }
+function pick(mx, my){ const w = toWorld(mx,my); let best = null, bd = 18*18/(view.k*view.k);
+  for (let i=0;i<nodes.length;i++){ const n = nodes[i]; if (!vis[n.id]) continue;
+    const dx = n.x-w.x, dy = n.y-w.y, d = dx*dx+dy*dy; if (d < bd){ bd = d; best = n; } } return best; }
+
+// ---- interaction ----
+let dragNode = null, panning = false, panStart = null, moved = false;
+cv.addEventListener("mousedown", function(e){
+  resize(); // refresh the canvas origin before a gesture starts
+  const mx = e.clientX - cvLeft, my = e.clientY - cvTop;
+  const n = pick(mx, my); moved = false;
+  if (n){ dragNode = n; cv.classList.add("dragging"); }
+  else { panning = true; panStart = { x: mx - view.x, y: my - view.y }; cv.classList.add("panning"); }
+});
+window.addEventListener("mousemove", function(e){
+  if (currentView !== "graph") return;
+  const mx = e.clientX - cvLeft, my = e.clientY - cvTop;
+  if (dragNode){ const w = toWorld(mx,my); dragNode.x = w.x; dragNode.y = w.y; dragNode.vx = 0; dragNode.vy = 0;
+    pos.set(dragNode.id, { x: w.x, y: w.y }); alpha = Math.max(alpha,0.25); moved = true; return; }
+  if (panning){ view.x = mx - panStart.x; view.y = my - panStart.y; moved = true; tip.classList.remove("on"); return; }
+  if (e.target !== cv){ hoverNode = null; tip.classList.remove("on"); return; }
+  const n = pick(mx, my); hoverNode = n;
+  if (n){ showTip(n, e.clientX, e.clientY); } else { tip.classList.remove("on"); }
+});
+window.addEventListener("mouseup", function(){
+  if (dragNode && !moved){ selectNode(dragNode); }
+  else if (panning && !moved){ selectNode(null); }
+  dragNode = null; panning = false; cv.classList.remove("dragging","panning");
+});
+cv.addEventListener("wheel", function(e){ e.preventDefault();
+  const mx = e.clientX - cvLeft, my = e.clientY - cvTop;
+  const factor = Math.exp(-e.deltaY * 0.0016);
+  const nk = Math.min(4, Math.max(0.25, view.k * factor));
+  // zoom around cursor
+  const wx = (mx - view.x)/view.k, wy = (my - view.y)/view.k;
+  view.k = nk; view.x = mx - wx*nk; view.y = my - wy*nk;
+}, { passive: false });
+cv.addEventListener("mouseleave", function(){ hoverNode = null; tip.classList.remove("on"); });
+
+function showTip(n, mx, my){
+  let sub = n.type;
+  if (n.type === "thread" && n.meta) sub = (n.meta.area||"") + " · " + (n.meta.priority||"") + " · " + (n.meta.status||"");
+  else if (n.type === "value" && n.origin) sub = n.origin + " fact";
+  tip.innerHTML = '<div class="t-t">'+esc(n.label)+'</div><div class="t-s">'+esc(sub)+' · '+esc(n.origin)+'</div>';
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let x = mx+14, y = my+14; if (x+tw > window.innerWidth-8) x = mx-tw-14; if (y+th > window.innerHeight-8) y = my-th-14;
+  tip.style.left = x+"px"; tip.style.top = y+"px"; tip.classList.add("on");
+}
+
+// ---- detail drawer ----
+function selectNode(n){ selected = n; if (n) renderDetail(n); else closeDetail(); }
+function closeDetail(){ selected = null; document.getElementById("detail").classList.remove("on"); }
+document.getElementById("d-close").onclick = closeDetail;
+
+function factCard(f){
+  const st = factStateAt(f, curDate);
+  const win = f.valid_from ? (f.valid_to ? (f.valid_from+" → "+f.valid_to) : ("since "+f.valid_from)) : "no valid-time (current state)";
+  let meta = '<span class="tag win'+(st==="expired"?" exp":"")+'">'+esc(win)+'</span>';
+  meta += '<span class="tag state-'+st+'">'+st+' @ '+esc(curDate)+'</span>';
+  if (f.confidence) meta += '<span class="tag conf-'+f.confidence+'">confidence: '+esc(f.confidence)+'</span>';
+  if (f.recorded) meta += '<span class="tag">recorded '+esc(f.recorded)+'</span>';
+  if (f.invalidated) meta += '<span class="tag">invalidated '+esc(f.invalidated)+'</span>';
+  if (f.provenance) meta += '<span class="tag prov" title="'+esc(f.provenance)+'">⌖ '+esc(f.provenance)+'</span>';
+  else if (f.note) meta += '<span class="tag prov">⌖ '+esc(f.note)+'</span>';
+  return '<div class="fact '+st+'"><div class="spo"><b>'+esc(f.subject)+'</b> '+
+    '<span class="pred">'+esc(f.predicate)+'</span> → <span class="obj">'+esc(f.object)+'</span></div>'+
+    '<div class="meta">'+meta+'</div></div>';
+}
+
+function renderDetail(n){
+  const d = document.getElementById("detail"); d.classList.add("on");
+  const badges = document.getElementById("d-badges");
+  badges.innerHTML = '<span class="badge '+(n.origin==="command"?"command":"chronos")+'">'+
+    (n.origin==="command"?"Seen Command":"Chronos vault")+'</span>'+
+    '<span class="badge type">'+esc(n.type)+'</span>';
+  document.getElementById("d-title").textContent = n.label;
+  const body = document.getElementById("d-body");
+  let h = "";
+
+  if (n.type === "value"){
+    // find the owning fact edge
+    let owner = null; for (let i=0;i<links.length;i++){ if (links[i].target===n.id && links[i].kind==="fact"){ owner = links[i]; break; } }
+    h += owner ? factCard(owner) : '<div class="d-empty">Value node.</div>';
+  } else if (n.type === "thread"){
+    const m = n.meta || {};
+    h += '<div class="d-row"><span class="k">Department</span><span class="v">'+esc(m.area||"—")+'</span></div>';
+    h += '<div class="d-row"><span class="k">Priority</span><span class="v">'+esc(m.priority||"—")+'</span></div>';
+    h += '<div class="d-row"><span class="k">Status</span><span class="v">'+esc(m.status||"—")+'</span></div>';
+    if (m.threadId) h += '<div class="d-row"><span class="k">Thread id</span><span class="v mono">'+esc(m.threadId)+'</span></div>';
+  } else if (n.type === "dept"){
+    const m = n.meta || {};
+    h += '<div class="d-row"><span class="k">Department</span><span class="v">'+esc(m.title||n.label)+'</span></div>';
+    if (m.charter) h += '<div class="d-sec">Charter</div><div class="d-empty">'+esc(m.charter)+'</div>';
+    const th = links.filter(function(l){ return l.kind==="work" && l.source===n.id; }).map(function(l){ return byId[l.target]; }).filter(Boolean);
+    if (th.length){ h += '<div class="d-sec">Threads ('+th.length+')</div><div class="linklist">'+
+      th.map(function(t){ return '<a data-id="'+esc(t.id)+'">'+esc(t.label)+'</a>'; }).join("")+'</div>'; }
+  } else {
+    // note or entity — show its facts + connections
+    h += '<div class="d-row"><span class="k">Type</span><span class="v">'+esc(n.type)+'</span></div>';
+    if (n.updated) h += '<div class="d-row"><span class="k">File updated</span><span class="v mono">'+esc(String(n.updated).replace("T"," "))+'</span></div>';
+    h += '<div class="d-row"><span class="k">Connections</span><span class="v">'+(n.degree||0)+'</span></div>';
+    const facts = (n.facts||[]);
+    if (facts.length){
+      const active = facts.filter(function(f){ return factStateAt(f,curDate)==="active"; }).length;
+      // The viewed moment is already the loudest thing in the dock — don't repeat it in a section label.
+      h += '<div class="d-sec">Facts — '+active+' true now / '+facts.length+' recorded</div>';
+      // active first, then others by valid_from
+      facts.slice().sort(function(a,b){ const sa=factStateAt(a,curDate)==="active"?0:1, sb=factStateAt(b,curDate)==="active"?0:1;
+        return sa-sb || String(b.valid_from||"").localeCompare(String(a.valid_from||"")); })
+        .forEach(function(f){ h += factCard(f); });
+    }
+    const wiki = links.filter(function(l){ return l.kind==="link" && (l.source===n.id||l.target===n.id); })
+      .map(function(l){ return byId[l.source===n.id?l.target:l.source]; }).filter(Boolean);
+    if (wiki.length){ const uniq = {}; wiki.forEach(function(w){ uniq[w.id]=w; });
+      const arr = Object.values(uniq);
+      h += '<div class="d-sec">Linked notes ('+arr.length+')</div><div class="linklist">'+
+        arr.map(function(w){ return '<a data-id="'+esc(w.id)+'">'+esc(w.label)+'</a>'; }).join("")+'</div>'; }
+  }
+  if (!h) h = '<div class="d-empty">No further detail.</div>';
+  body.innerHTML = h;
+  // wire jump links
+  body.querySelectorAll("a[data-id]").forEach(function(a){ a.onclick = function(){
+    const t = byId[a.getAttribute("data-id")]; if (t){ selectNode(t); centerOn(t); } }; });
+}
+function centerOn(n){ view.x = W/2 - n.x*view.k; view.y = H/2 - n.y*view.k; alpha = Math.max(alpha,0.2); }
+// Fit all visible nodes into the stage, leaving room for whichever panels are actually open.
+function fitView(){
+  computeVisible();
+  let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity, any=false;
+  for (const n of nodes){ if (!vis[n.id]) continue; any=true;
+    if (n.x<minX) minX=n.x; if (n.x>maxX) maxX=n.x; if (n.y<minY) minY=n.y; if (n.y>maxY) maxY=n.y; }
+  if (!any) return;
+  const detailOpen = document.getElementById("detail").classList.contains("on");
+  const padL=272, padR=detailOpen?388:48, padT=32, padB=40; // panel-aware margins
+  const gw=Math.max(maxX-minX,1), gh=Math.max(maxY-minY,1);
+  const availW=Math.max(120, W-padL-padR), availH=Math.max(120, H-padT-padB);
+  const k=Math.min(3, Math.max(0.3, Math.min(availW/gw, availH/gh)));
+  view.k=k;
+  view.x=(padL+availW/2) - ((minX+maxX)/2)*k;
+  view.y=(padT+availH/2) - ((minY+maxY)/2)*k;
+  alpha=Math.max(alpha,0.15);
+}
+
+// ---- timeline dock ----
+const slider = document.getElementById("slider"), playBtn = document.getElementById("play"), dateEl = document.getElementById("date");
+const trackEl = document.getElementById("track");
+
+// Zoom: the WINDOW the slider spans — the whole history, or just the last day/week/month, always
+// ending at the newest stamp. Minute-precision dates make the Day window genuinely minute-by-minute.
+let fullFromMs = 0, fullToMs = 1, zoomSpan = "all";
+const SPAN_MS = { day: 86400000, week: 7 * 86400000, month: 30 * 86400000 };
+function applyZoom(silent){
+  toMsV = fullToMs;
+  fromMsV = zoomSpan === "all" ? fullFromMs : Math.max(fullFromMs, fullToMs - SPAN_MS[zoomSpan]);
+  if (toMsV <= fromMsV) toMsV = fromMsV + 60000;
+  document.getElementById("d-from").textContent = fromMs(fromMsV).replace("T", " ");
+  document.getElementById("d-to").textContent = fromMs(toMsV).replace("T", " ");
+  document.querySelectorAll("#zoom button").forEach(function(b){ b.classList.toggle("on", b.getAttribute("data-span") === zoomSpan); });
+  setDateFromSlider(silent);
+}
+document.querySelectorAll("#zoom button").forEach(function(b){
+  b.onclick = function(){ stopPlay(); zoomSpan = b.getAttribute("data-span"); applyZoom(); };
+});
+function updateCounts(){ let a=0,e=0,f=0;
+  links.forEach(function(L){ if (L.kind!=="fact") return; const s = factStateAt(L, curDate); if (s==="active") a++; else if (s==="expired") e++; else f++; });
+  document.getElementById("c-act").textContent = a; document.getElementById("c-exp").textContent = e; document.getElementById("c-fut").textContent = f; }
+function setDateFromSlider(silent){ const pct = +slider.value/1000; const ms = fromMsV + (toMsV-fromMsV)*pct;
+  curDate = fromMs(ms); dateEl.textContent = curDate.replace("T"," "); trackEl.style.setProperty("--pctn", pct);
+  updateCounts(); if (!silent) alpha = Math.max(alpha,0.12);
+  if (selected) renderDetail(selected); }
+slider.addEventListener("input", function(){ stopPlay(); setDateFromSlider(); });
+function stopPlay(){ playing=false; playBtn.textContent="▶"; if (playTimer){ clearInterval(playTimer); playTimer=null; } }
+function startPlay(){ playing=true; playBtn.textContent="❚❚"; if (+slider.value>=1000) slider.value=0;
+  playTimer = setInterval(function(){ let v = +slider.value + 6; if (v>=1000){ v=1000; slider.value=v; setDateFromSlider(); stopPlay(); return; } slider.value=v; setDateFromSlider(); }, 55); }
+playBtn.addEventListener("click", function(){ playing?stopPlay():startPlay(); });
+document.getElementById("now-btn").onclick = function(){ stopPlay(); slider.value = 1000; setDateFromSlider(); };
+document.getElementById("recenter-btn").onclick = function(){ fitView(); };
+
+// ---- filters ----
+document.getElementById("origin-chips").querySelectorAll(".chip").forEach(function(c){
+  c.onclick = function(){ const o = c.getAttribute("data-origin"); originOn[o] = !originOn[o];
+    c.classList.toggle("on", originOn[o]); c.classList.toggle("off", !originOn[o]); alpha = Math.max(alpha,0.3); }; });
+document.getElementById("t-expired").addEventListener("change", function(e){ showExpired = e.target.checked; alpha = Math.max(alpha,0.25); });
+const searchEl = document.getElementById("search");
+searchEl.addEventListener("input", function(){
+  query = searchEl.value; applySearch();
+  // Search is a search OF THE GRAPH — if you start one from a reading view, go where the hits are.
+  if (query.trim() && currentView !== "graph") setView("graph");
+});
+cv.addEventListener("dblclick", function(){ fitView(); });
+
+// ---- the shell: three views, one canvas ----
+const VIEWS = {
+  graph:     { el:"view-graph",     title:"Graph" },
+  activity:  { el:"view-activity",  title:"Brain activity" },
+  overnight: { el:"view-overnight", title:"Overnight" },
+  health:    { el:"view-health",    title:"Health" },
+  access:    { el:"view-access",    title:"Access settings" },
+};
+const VIEW_ORDER = ["graph","activity","overnight","health","access"];
+let currentView = "graph";
+
+function setView(name){
+  if (!VIEWS[name]) name = "graph";
+  currentView = name;
+  document.body.setAttribute("data-view", name);
+  VIEW_ORDER.forEach(function(k){
+    const el = document.getElementById(VIEWS[k].el);
+    const on = k === name;
+    el.classList.toggle("on", on);
+    el.setAttribute("aria-hidden", on ? "false" : "true");
+  });
+  Array.prototype.forEach.call(document.querySelectorAll("#rail-nav .navitem"), function(b){
+    const on = b.getAttribute("data-view") === name;
+    b.classList.toggle("on", on);
+    if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  });
+  document.getElementById("hd-crumb").textContent = VIEWS[name].title;
+  if (name === "graph"){ resize(); alpha = Math.max(alpha, 0.25); }
+  if (name === "activity" && !actState.data && !actState.loading) actLoad();
+  if (name === "overnight" && !ovState.data && !ovState.loading) ovLoad();
+  if (name === "health" && !hlState.data && !hlState.loading) healthLoad();
+  if (name === "access") accessLoad();
+  // A CLOUD session's requests arrive as Supabase rows (brain_access), which no file-watcher can see.
+  // Poll while Activity is the visible view, and stop the moment it is not — so a cloud read shows up
+  // on its own, and nothing polls in the background.
+  if (name === "activity") startActivityPoll(); else stopActivityPoll();
+}
+
+const ACTIVITY_POLL_MS = 20000;
+let actPollTimer = null;
+function startActivityPoll(){
+  if (actPollTimer) return;
+  actPollTimer = setInterval(function(){
+    if (currentView === "activity" && !actState.loading && !document.hidden) actLoad();
+  }, ACTIVITY_POLL_MS);
+}
+function stopActivityPoll(){ if (actPollTimer){ clearInterval(actPollTimer); actPollTimer = null; } }
+Array.prototype.forEach.call(document.querySelectorAll("#rail-nav .navitem"), function(b){
+  b.addEventListener("click", function(){ setView(b.getAttribute("data-view")); });
+});
+
+// ---- keyboard ----
+window.addEventListener("keydown", function(e){
+  // View switching works even while typing in the search box.
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key >= "1" && e.key <= String(VIEW_ORDER.length)){
+    e.preventDefault(); setView(VIEW_ORDER[+e.key - 1]); return;
+  }
+  if (e.target && e.target.tagName === "INPUT"){
+    if (e.key === "Escape"){ searchEl.value=""; query=""; applySearch(); searchEl.blur(); }
+    return;
+  }
+  if (e.key === "Escape"){
+    if (currentView !== "graph"){ setView("graph"); return; }
+    if (selected) closeDetail();
+    if (query){ searchEl.value=""; query=""; applySearch(); }
+  } else if ((e.key === "f" || e.key === "F") && currentView === "graph"){ fitView(); }
+});
+
+// ---- Brain activity view -----------------------------------------------------
+// Three sections over one payload: the latest writes, every write, and every request made OF the brain.
+// Every MCP client writes through the same shared writer, so facts and requests arrive stamped with
+// the credential-owned registered source. The MCP handshake's software name is metadata, not authority.
+var actState = { data:null, section:"recent", loading:false };
+
+function actTime(at){
+  var s = String(at||""); if (!s) return "";
+  if (s.length <= 10) return "";            // date-only provenance has no clock to show
+  var t = s.slice(11,16);
+  return t ? t + " UTC" : "";
+}
+function actDayLabel(d){
+  if (d === "unknown") return "undated";
+  var today = new Date().toISOString().slice(0,10);
+  if (d === today) return "today · " + d;
+  return d;
+}
+function actGroup(rows){
+  var days = [], idx = {};
+  rows.forEach(function(r){
+    var d = String(r.at||"").slice(0,10) || "unknown";
+    if (idx[d] === undefined){ idx[d] = days.length; days.push({ day:d, items:[] }); }
+    days[idx[d]].items.push(r);
+  });
+  return days;
+}
+// The validity window, rendered the same way everywhere in the app: teal while it still holds,
+// violet once it closed, neutral when a fact carries no valid-time at all.
+function winChip(r){
+  if (r.valid_from && r.valid_to)
+    return '<span class="win closed">' + esc(r.valid_from) + " → " + esc(r.valid_to) + '</span>';
+  if (r.valid_from) return '<span class="win">' + esc(r.valid_from) + " → open</span>";
+  return '<span class="win none">no valid-time</span>';
+}
+
+function actChangeRow(r){
+  var cls = "evt " + (r.kind === "changed" ? "changed" : "added") + (r.retired ? " retired" : "");
+  var obj = String(r.object||"");
+  var shown = obj.length > 260 ? obj.slice(0,260) + "…" : obj;
+  var meta = [winChip(r), '<span class="evt-tag">' + esc(r.kind) + '</span>'];
+  if (r.retired) meta.push('<span class="evt-tag">history</span>');
+  if (r.by) meta.push('<span class="evt-by">' + esc(r.by) + '</span>');
+  if (r.note) meta.push(esc(r.note));
+  var t = actTime(r.at); if (t) meta.push('<span class="mono">' + esc(t) + '</span>');
+  return '<article class="' + cls + '"><span class="evt-spine"></span><div>'
+    + '<div class="evt-1"><b>' + esc(r.subject) + '</b> <span class="pred">' + esc(r.predicate)
+    + '</span> <span class="arrow">→</span> ' + esc(shown) + '</div>'
+    + '<div class="evt-2">' + meta.join("") + '</div>'
+    + (r.change ? '<div class="evt-why">' + esc(r.change) + '</div>' : '')
+    + '</div></article>';
+}
+
+function actRequestRow(r){
+  var cls = "evt " + (r.ok === false ? "failed" : (r.mode === "write" ? "write" : "read"));
+  var meta = ['<span class="evt-tag">' + esc(r.mode || "read") + '</span>'];
+  if (r.ok === false) meta.push('<span class="evt-tag">failed</span>');
+  if (r.by) meta.push('<span class="evt-by">' + esc(r.by) + '</span>');
+  if (typeof r.ms === "number") meta.push('<span class="mono">' + r.ms + 'ms</span>');
+  var t = actTime(r.at); if (t) meta.push('<span class="mono">' + esc(t) + '</span>');
+  return '<article class="' + cls + '"><span class="evt-spine"></span><div>'
+    + '<div class="evt-1"><b>' + esc(r.tool) + '</b>' + (r.args ? ' <span class="pred">' + esc(r.args) + '</span>' : '') + '</div>'
+    + '<div class="evt-2">' + meta.join("") + '</div>'
+    + (r.error ? '<div class="evt-why">' + esc(r.error) + '</div>' : '')
+    + '</div></article>';
+}
+
+function actRender(){
+  var body = document.getElementById("act-body");
+  var d = actState.data;
+  if (actState.loading){ body.innerHTML = '<div class="act-empty">reading the vault…</div>'; return; }
+  if (!d){ body.innerHTML = '<div class="act-empty">No data.</div>'; return; }
+  if (d.error){ body.innerHTML = '<div class="notice">' + esc(d.error) + '</div>'; return; }
+
+  var rows, isReq = actState.section === "requests";
+  if (isReq) rows = d.requests || [];
+  else rows = (actState.section === "all" ? d.all : d.recent) || [];
+
+  if (!rows.length){
+    body.innerHTML = '<div class="act-empty">' + (isReq
+      ? "No requests logged yet.<br>Every read or write an AI client makes through the brain MCP<br>is recorded here with its authenticated source."
+      : "No changes recorded yet.") + '</div>';
+    return;
+  }
+  var html = "";
+  var today = new Date().toISOString().slice(0,10);
+  actGroup(rows).forEach(function(g){
+    html += '<div class="act-day mono' + (g.day === today ? " today" : "") + '">'
+      + esc(actDayLabel(g.day)) + '<span class="ln"></span><span class="ct">' + g.items.length + '</span></div>';
+    g.items.forEach(function(r){ html += isReq ? actRequestRow(r) : actChangeRow(r); });
+  });
+  body.innerHTML = html;
+  var pane = body.closest(".pane"); if (pane) pane.scrollTop = 0;
+}
+
+function actSetSection(sec){
+  actState.section = sec;
+  Array.prototype.forEach.call(document.querySelectorAll(".act-tab"), function(b){
+    b.className = "act-tab" + (b.getAttribute("data-sec") === sec ? " on" : "");
+  });
+  actRender();
+}
+
+async function actLoad(){
+  actState.loading = true; actRender();
+  try { actState.data = await window.chronos.requestActivity(); }
+  catch (e){ actState.data = { error: "Could not read activity: " + (e && e.message || e) }; }
+  actState.loading = false;
+  var d = actState.data || {}, c = d.counts || {};
+  document.getElementById("act-n-recent").textContent = (d.recent || []).length ? "(" + (d.recent||[]).length + ")" : "";
+  document.getElementById("act-n-all").textContent = c.changes ? "(" + c.changes + ")" : "";
+  document.getElementById("act-n-req").textContent = c.requests ? "(" + c.requests + ")" : "";
+  var sub = [];
+  if (c.changes) sub.push(c.changes + " writes");
+  if (c.requests) sub.push(c.requests + " requests (" + (c.requestReads||0) + " read / " + (c.requestWrites||0) + " write)");
+  if (d.newestChangeAt) sub.push("last write " + String(d.newestChangeAt).slice(0,16).replace("T"," "));
+  document.getElementById("act-sub").textContent = sub.length ? sub.join(" · ") : "nothing recorded yet";
+  actRender();
+}
+
+// The Brain menu (main.js) asks for a section — open the view on it, on that section, freshly read.
+function actOpen(section){
+  if (section) actState.section = section;
+  const first = !actState.data && !actState.loading;
+  setView("activity");                       // loads on the first visit
+  if (section) actSetSection(section);
+  if (!first && !actState.loading) actLoad(); // a menu open always re-reads the vault
+}
+Array.prototype.forEach.call(document.querySelectorAll(".act-tab"), function(b){
+  b.addEventListener("click", function(){ actSetSection(b.getAttribute("data-sec")); });
+});
+document.getElementById("act-refresh").addEventListener("click", actLoad);
+if (window.chronos && window.chronos.onOpenActivity) window.chronos.onOpenActivity(function(sec){ actOpen(sec); });
+
+// ---- Health view -------------------------------------------------------------
+// The Keeper's audit (lib/keeper.mjs review()), which is the one thing that reads the WHOLE brain at
+// once: how much of it is still true, what contradicts itself, and what nothing has refreshed. It can
+// fail (no vault, blocked folder) — when it does we print the failure, never an empty pane.
+var hlState = { data:null, loading:false };
+
+function ticks(n, red){
+  if (!n) return '<div class="ticks"><span class="none">none</span></div>';
+  var shown = Math.min(n, 48), out = "";
+  for (var i=0;i<shown;i++) out += "<i></i>";
+  return '<div class="ticks' + (red ? " red" : "") + '">' + out
+    + (n > shown ? '<span class="none">+' + (n - shown) + '</span>' : '') + '</div>';
+}
+
+function healthRender(){
+  var body = document.getElementById("hl-body");
+  var d = hlState.data;
+  if (hlState.loading){ body.innerHTML = '<div class="act-empty">auditing the brain…</div>'; return; }
+  if (!d){ body.innerHTML = '<div class="act-empty">No audit yet.</div>'; return; }
+  if (d.error){
+    body.innerHTML = '<div class="notice">' + esc(d.error) + '</div>' + healthMeta(d);
+    return;
+  }
+  var total = +d.facts || 0, cur = +d.currentFacts || 0;
+  var history = Math.max(0, total - cur);
+  var curPct = total ? Math.round((cur / total) * 100) : 0;
+  var contra = d.contradictions || [], stale = d.stale || [];
+  var clean = !!d.clean;
+
+  var h = '<div class="verdict ' + (clean ? "clean" : "look") + '">'
+    + '<span class="vk">' + (clean ? "Brain is clean" : "Worth a look") + '</span>'
+    + '<span class="vd">' + (clean
+      ? "Nothing contradicts itself, and every open fact was refreshed inside the last 14 days."
+      : (contra.length + " contradiction" + (contra.length===1?"":"s") + " · "
+         + stale.length + " possibly stale fact" + (stale.length===1?"":"s"))) + '</span></div>';
+
+  h += '<div class="gauges">';
+  h += '<div class="gauge now"><div class="lb">True now</div>'
+    + '<div class="big">' + cur + '<span class="of"> / ' + total + '</span></div>'
+    + '<div class="split"><i class="a" style="width:' + curPct + '%"></i><i class="b" style="width:' + (100-curPct) + '%"></i></div>'
+    + '<div class="slegend"><span class="k"><i style="background:var(--now)"></i>' + cur + ' still true</span>'
+    + '<span class="k"><i style="background:rgba(199,146,234,.6)"></i>' + history + ' history</span></div>'
+    + '<div class="cap">Every fact ever recorded is kept. ' + curPct + '% of them still hold today.</div></div>';
+  h += '<div class="gauge ' + (contra.length ? "warn" : "clear") + '"><div class="lb">Contradictions</div>'
+    + '<div class="big">' + contra.length + '</div>' + ticks(contra.length, true)
+    + '<div class="cap">One subject and predicate with two answers that both claim to be current.</div></div>';
+  h += '<div class="gauge ' + (stale.length ? "warn" : "clear") + '"><div class="lb">Possibly stale</div>'
+    + '<div class="big">' + stale.length + '</div>' + ticks(stale.length, false)
+    + '<div class="cap">Still-open facts that nothing has re-recorded in over 14 days.</div></div>';
+  h += '</div>';
+
+  h += '<div class="hsec"><h3>Contradictions<span class="ln"></span><span class="ct">' + contra.length + '</span></h3>';
+  h += contra.length
+    ? contra.map(function(c){ return '<div class="hrow contra"><span class="sp"></span><span class="txt">' + esc(c) + '</span></div>'; }).join("")
+    : '<div class="hnone">None. No subject in the brain holds two current answers.</div>';
+  h += '</div>';
+
+  h += '<div class="hsec"><h3>Possibly stale<span class="ln"></span><span class="ct">' + stale.length + '</span></h3>';
+  h += stale.length
+    ? stale.map(function(s){ return '<div class="hrow"><span class="sp"></span><span class="txt">' + esc(s) + '</span></div>'; }).join("")
+    : '<div class="hnone">None. Every fact still open was recorded inside the last 14 days.</div>';
+  h += '</div>';
+
+  body.innerHTML = h + healthMeta(d);
+}
+function healthMeta(d){
+  var s = d.sources || {};
+  var lines = [];
+  lines.push("vault: " + esc(s.vaultPath || "not found") + (s.vaultFound ? "" : " (missing)"));
+  if (s.statePath) lines.push("command state: " + esc(s.statePath) + (s.stateFound ? "" : " (missing)"));
+  if (s.today) lines.push("audited as of " + esc(s.today));
+  if (s.version) lines.push(esc(s.version));
+  return '<div class="hmeta mono">' + lines.join("<br>") + '</div>';
+}
+
+async function healthLoad(){
+  hlState.loading = true; healthRender();
+  try {
+    if (!window.chronos || !window.chronos.requestHealth) throw new Error("health bridge unavailable");
+    hlState.data = await window.chronos.requestHealth();
+  } catch (e){ hlState.data = { error: "Could not audit the brain: " + (e && e.message || e) }; }
+  hlState.loading = false;
+  healthRender();
+}
+document.getElementById("hl-refresh").addEventListener("click", healthLoad);
+
+// ---- Overnight view ----------------------------------------------------------
+// Two cloud routines run unattended every night — 4:00am PT on the applications, 4:30am PT on
+// seenjobs.io — and each leaves ONE timeline entry as its digest. This is where you read them, grouped
+// by day, newest first. Every recent timeline entry is shown, not only the tagged ones: a routine that
+// forgets the heading convention should still be visible here rather than silently disappear.
+const ovState = { data:null, loading:false, open:{} };
+const LANE_CLASS = { "applications":"applications", "seenjobs.io":"seenjobs", "overnight":"" };
+
+function ovRender(){
+  const body = document.getElementById("ov-body");
+  const sub = document.getElementById("ov-sub");
+  const d = ovState.data;
+  if (ovState.loading && !d){ sub.textContent = "reading the vault…"; body.innerHTML = ""; return; }
+  if (!d){ body.innerHTML = ""; return; }
+  if (d.error){
+    sub.textContent = "could not read the overnight digests";
+    body.innerHTML = '<div class="notice">' + esc(d.error) + '</div>';
+    return;
+  }
+  const runs = (d.counts && d.counts.runs) || 0;
+  const total = (d.counts && d.counts.entries) || 0;
+  sub.textContent = runs
+    ? runs + " agent run" + (runs === 1 ? "" : "s") + " and " + total + " timeline entr" + (total === 1 ? "y" : "ies") + " over the last 7 days"
+    : "The 4am agents write one digest each per night. None recorded yet — the next run is 4:00am and 4:30am PT.";
+  if (!total){
+    body.innerHTML = '<div class="hnone">Nothing in the vault’s timeline for the last 7 days. '
+      + 'If a routine ran but nothing appears here, it wrote to the cloud and this Mac has not pulled it '
+      + 'yet — Chronos syncs every 30 seconds while it is open.</div>' + ovMeta(d.sources);
+    return;
+  }
+  let html = "";
+  let day = null;
+  const todayISO = (d.sources && d.sources.today) || "";
+  (d.entries || []).forEach(function(e, i){
+    if (e.date !== day){
+      day = e.date;
+      html += '<div class="ovday"><span>' + esc(day) + '</span>'
+        + (day === todayISO ? '<span class="today">today</span>' : "")
+        + '<span class="ln"></span></div>';
+    }
+    const lane = e.lane ? (LANE_CLASS[e.lane] !== undefined ? LANE_CLASS[e.lane] : "") : null;
+    const long = String(e.body || "").length > 420;
+    const open = !!ovState.open[i];
+    html += '<div class="ovcard' + (e.lane ? " run" : "") + '">'
+      + '<h4><span class="ht">' + esc(e.heading) + '</span>'
+      + (e.lane ? '<span class="lane ' + lane + '">' + esc(e.lane) + '</span>' : "")
+      + '</h4>'
+      + '<div class="bd' + (long && !open ? " clip" : "") + '">' + esc(e.body) + '</div>'
+      + (long ? '<button class="ovmore" data-i="' + i + '">' + (open ? "show less" : "show more") + '</button>' : "")
+      + '</div>';
+  });
+  body.innerHTML = html + ovMeta(d.sources);
+  Array.prototype.forEach.call(body.querySelectorAll(".ovmore"), function(b){
+    b.addEventListener("click", function(){
+      const i = b.getAttribute("data-i");
+      ovState.open[i] = !ovState.open[i];
+      ovRender();
+    });
+  });
+}
+
+function ovMeta(s){
+  if (!s) return "";
+  const lines = [];
+  lines.push("vault: " + esc(s.vaultPath || "not found") + (s.vaultFound ? "" : " (missing)"));
+  lines.push("4am — applications 11:00 UTC · 4am — seenjobs.io 11:30 UTC");
+  if (s.version) lines.push(esc(s.version));
+  return '<div class="hmeta mono">' + lines.join("<br>") + '</div>';
+}
+
+async function ovLoad(){
+  ovState.loading = true; ovRender();
+  try {
+    if (!window.chronos || !window.chronos.requestOvernight) throw new Error("overnight bridge unavailable");
+    ovState.data = await window.chronos.requestOvernight();
+  } catch (e){ ovState.data = { error: "Could not read the overnight digests: " + (e && e.message || e) }; }
+  ovState.loading = false;
+  ovRender();
+}
+document.getElementById("ov-refresh").addEventListener("click", ovLoad);
+
+// ---- Access settings ---------------------------------------------------------
+let accessClients = [];
+function accessShowSecret(out){
+  const box = document.getElementById("ac-secret");
+  box.style.display = "block";
+  if (!out.secret && out.secretInstalled){
+    box.innerHTML = '<div class="notice"><b>Credential installed securely.</b><br>'
+      + '<span>The secret stayed in the privileged Chronos process and was not sent to this screen.</span>'
+      + (out.credentialFile?'<br><span class="mono">installed: '+esc(out.credentialFile)+'</span>':'')
+      + (out.cloud && !out.cloud.synced?'<br><span class="pred">cloud pending: '+esc(out.cloud.reason||"not synced")+'</span>':'')
+      + '</div>';
+    return;
+  }
+  box.innerHTML = '<div class="notice"><b>Copy now — shown once.</b><br><span class="mono" style="word-break:break-all">'
+    + esc(out.secret) + '</span>'
+    + (out.credentialFile?'<br><span class="mono">installed: '+esc(out.credentialFile)+'</span>':'')
+    + (out.cloud && !out.cloud.synced?'<br><span class="pred">cloud pending: '+esc(out.cloud.reason||"not synced")+'</span>':'')
+    + '<br><button class="ghost" id="ac-copy" style="margin-top:10px">copy credential</button></div>';
+  document.getElementById("ac-copy").onclick = async function(){ await window.chronos.copyCredentialOnce(out.secret); this.textContent="copied"; };
+}
+function accessRender(){
+  const body = document.getElementById("ac-body");
+  if (!accessClients.length){ body.innerHTML='<div class="act-empty">No authenticated clients. Brain MCP access is locked until one is issued.</div>'; return; }
+  function card(c){
+    const status = c.revokedAt ? "revoked" : (c.expiresAt && Date.parse(c.expiresAt)<=Date.now() ? "expired" : "active");
+    return '<article class="evt ' + (status==="active"?'read':'failed') + '"><span class="evt-spine"></span><div>'
+      + '<div class="evt-1"><b>' + esc(c.name) + '</b> <span class="pred">' + esc(c.id) + '</span></div>'
+      + '<div class="evt-2"><span class="evt-tag">' + status + '</span><span class="evt-by">' + esc((c.scopes||[]).join(", ")) + '</span>'
+      + (c.installedOnThisMac?'<span class="mono">installed on this Mac</span>':'')
+      + (c.expiresAt?'<span class="mono">expires '+esc(c.expiresAt.slice(0,10))+'</span>':'<span class="mono">no expiry</span>')
+      + (c.lastUsedAt?'<span class="mono">last used '+esc(c.lastUsedAt.slice(0,16).replace("T"," "))+'</span>':'') + '</div>'
+      // An expired credential is renewable (same secret, new expiry) and revocable; it is never a dead end.
+      + (status!=="revoked"?'<div style="margin-top:8px"><button class="ghost ac-renew" data-id="'+esc(c.id)+'" data-name="'+esc(c.name)+'">renew</button> '
+        + (status==="active"?'<button class="ghost ac-rotate" data-id="'+esc(c.id)+'">rotate</button> ':'')
+        + '<button class="ghost ac-revoke" data-id="'+esc(c.id)+'">revoke</button></div>':'')
+      + '</div></article>';
+  }
+  const current = accessClients.filter(function(c){ return !c.revokedAt; });
+  const revoked = accessClients.filter(function(c){ return !!c.revokedAt; });
+  body.innerHTML = '<h2 style="font-size:14px;margin:0 0 10px">Current credentials</h2>'
+    + (current.length?current.map(card).join(""):'<div class="act-empty">No current credentials.</div>')
+    + (revoked.length?'<h2 style="font-size:14px;margin:24px 0 10px">Explicitly revoked credentials</h2>'+revoked.map(card).join(""):'');
+  body.querySelectorAll(".ac-revoke").forEach(function(b){ b.onclick=async function(){ if(!confirm("Revoke this client immediately?"))return; await window.chronos.revokeAccessClient(b.dataset.id); await accessLoad(); }; });
+  body.querySelectorAll(".ac-renew").forEach(function(b){ b.onclick=async function(){
+    const sel=document.getElementById("ac-ttl"); const ttl=Number(sel.value); const expiresAt=ttl?new Date(Date.now()+ttl*3600000).toISOString():null;
+    if(!confirm("Renew "+b.dataset.name+" — "+sel.options[sel.selectedIndex].text+"? The credential itself does not change, so running sessions keep working."))return;
+    const box=document.getElementById("ac-secret"); box.style.display="block";
+    try { const out=await window.chronos.renewAccessClient(b.dataset.id, expiresAt);
+      box.innerHTML='<div class="notice"><b>Renewed '+esc(out.client.name)+'.</b><br><span>Same credential, '+(out.client.expiresAt?'now expires '+esc(out.client.expiresAt.slice(0,10)):'no expiry')+'. Nothing to reinstall.</span>'
+        + (out.cloud && !out.cloud.synced?'<br><span class="pred">cloud pending: '+esc(out.cloud.reason||"not synced")+'</span>':'')+'</div>'; }
+    catch(e){ box.innerHTML='<div class="notice">'+esc(e.message||e)+'</div>'; }
+    await accessLoad(); }; });
+  body.querySelectorAll(".ac-rotate").forEach(function(b){ b.onclick=async function(){ if(!confirm("Rotate now? The old credential will stop working immediately."))return; accessShowSecret(await window.chronos.rotateAccessClient(b.dataset.id)); await accessLoad(); }; });
+}
+async function accessLoad(){ try { accessClients=await window.chronos.listAccessClients(); accessRender(); } catch(e){ document.getElementById("ac-body").innerHTML='<div class="notice">'+esc(e.message||e)+'</div>'; } }
+document.getElementById("ac-refresh").onclick=accessLoad;
+document.getElementById("ac-issue").onclick=async function(){
+  const scopes=[]; if(document.getElementById("ac-read").checked)scopes.push("read"); if(document.getElementById("ac-write").checked)scopes.push("write"); if(document.getElementById("ac-artifact-read").checked)scopes.push("artifact:read"); if(document.getElementById("ac-artifact-write").checked)scopes.push("artifact:write"); if(document.getElementById("ac-github").checked)scopes.push("github:write"); if(document.getElementById("ac-admin").checked)scopes.push("admin");
+  const ttl=Number(document.getElementById("ac-ttl").value); const expiresAt=ttl?new Date(Date.now()+ttl*3600000).toISOString():null;
+  try { const out=await window.chronos.issueAccessClient({name:document.getElementById("ac-name").value,scopes:scopes,expiresAt:expiresAt,installLocal:document.getElementById("ac-install").checked}); accessShowSecret(out); document.getElementById("ac-name").value=""; await accessLoad(); }
+  catch(e){ document.getElementById("ac-secret").style.display="block"; document.getElementById("ac-secret").innerHTML='<div class="notice">'+esc(e.message||e)+'</div>'; }
+};
+
+// ---- boot ----
+resize(); loop();
+async function boot(){
+  try {
+    const data = await window.chronos.requestGraph();
+    apply(data);
+    window.chronos.onGraph(function(d){
+      apply(d);
+      // LIVE. The main process watches the vault, so onGraph fires within moments of any local write —
+      // a Claude session's brain_add_fact, a board meeting, the hourly brain-sync. Refresh whichever
+      // data view is on screen so "what just changed" appears without touching anything. Views that
+      // are NOT visible are left alone; they reload when opened, so this costs nothing off-screen.
+      if (currentView === "activity") actLoad();
+      if (currentView === "overnight") ovLoad();
+      if (currentView === "health") healthLoad();
+    });
+    // reflect live vs partial in the pill, and stamp version + paths into the strip
+    const info = await window.chronos.sourcesInfo();
+    SOURCES = info || null;
+    document.getElementById("hd-ver").textContent = (info && info.version) ? info.version : "";
+    renderStrip();
+    if (!info || !info.vaultFound || !info.stateFound){
+      const p = document.getElementById("live-pill"); p.className = "pill warn"; p.textContent = "partial";
+    }
+  } catch (err){
+    document.getElementById("banner").className = "banner on";
+    document.getElementById("banner").textContent = "Could not load graph: " + (err && err.message || err);
+    resize();
+  }
+}
+boot();
+</script>
+</body>
+</html>

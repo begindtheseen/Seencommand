@@ -1,0 +1,9 @@
+{
+  "runtime": { "localFirst": true, "preferredAppleRuntime": "ollama", "fallbackLocalRuntime": null, "maxConcurrentWorkers": 1 },
+  "models": { "discoveryEnabled": true, "benchmarkBeforeAssignment": true, "allowUnverifiedModels": false },
+  "routing": { "remoteEscalationEnabled": false, "maxLocalAttemptsBeforeEscalation": 2 },
+  "budget": { "dailyRemoteUsd": 3, "monthlyRemoteUsd": 40, "perTaskRemoteUsd": 1, "perModelRemoteUsd": 10, "perWorkerRemoteUsd": 5, "requireApprovalAboveUsd": 0.5, "maxRetries": 2, "maximumContextTokens": 12000 },
+  "permissions": { "default": "READ_ONLY", "codingWorker": "BRANCH_WRITE", "deploymentWorker": "PREVIEW_DEPLOY", "productionRequiresApproval": true },
+  "memory": { "provider": "chronos", "citationsRequired": true, "invalidateOnGitChange": true, "maximumContextTokens": 12000 },
+  "safety": { "protectedBranches": ["main", "master", "production", "next-migration"], "blockDestructiveDatabaseCommands": true, "redactSecrets": true }
+}

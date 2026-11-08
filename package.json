@@ -1,0 +1,92 @@
+{
+  "name": "seen-command",
+  "version": "0.4.2",
+  "private": true,
+  "description": "Seen Command — the live exec cockpit for Seen: native Mac app, online brain (Chronos → Supabase), free-LLM board meetings, real tracked tasks.",
+  "main": "app/main.js",
+  "scripts": {
+    "start": "node engine/run.mjs && node scripts/build-dashboard.mjs && node engine/server.mjs",
+    "meeting": "node engine/run.mjs",
+    "dashboard": "node scripts/build-dashboard.mjs",
+    "brief": "node engine/run.mjs && node scripts/build-dashboard.mjs",
+    "serve": "node engine/server.mjs",
+    "brain:cloud": "node brain/lib/cloud.mjs status",
+    "eval:coding": "node scripts/eval-coding.mjs",
+    "running": "node scripts/running-code.mjs",
+    "drift:schema": "node scripts/schema-drift.mjs",
+    "proof": "node engine/completion.mjs",
+    "brain:sync": "node brain/lib/cloud.mjs push",
+    "brain:restore": "node brain/lib/cloud.mjs pull",
+    "build:task": "node engine/builder.mjs",
+    "agent:setup": "node scripts/setup-coding-agent.mjs",
+    "overnight": "node engine/overnight.mjs",
+    "brain:app": "node scripts/retire-chronos.mjs",
+    "app:dev": "electron .",
+    "app:package": "node scripts/build-dashboard.mjs && electron-builder --mac",
+    "app:install": "node scripts/stamp-build.mjs && node scripts/build-dashboard.mjs && electron-builder --mac && node scripts/install-app.mjs",
+    "schedule:mac": "bash scripts/schedule-macos.sh",
+    "update": "git pull origin main && npm run brain:restore && npm install && npm run app:install",
+    "brain:ask": "node brain/lib/keeper.mjs ask",
+    "brain:review": "node brain/lib/keeper.mjs review",
+    "brain:dedup": "node scripts/brain-dedup.mjs",
+    "self:update": "node engine/self-update.mjs",
+    "vsc:setup": "node scripts/vsc-setup.mjs",
+    "smoke:electron": "node scripts/smoke-electron.mjs",
+    "smoke:packaged": "node scripts/smoke-packaged.mjs",
+    "intelligence:hardware": "node scripts/detect-hardware.mjs",
+    "intelligence:models": "node scripts/discover-models.mjs",
+    "intelligence:benchmark": "node scripts/benchmark-models.mjs",
+    "intelligence:verify": "node scripts/verify-intelligence.mjs",
+    "intelligence:test": "node scripts/run-evaluation-suite.mjs",
+    "intelligence:slice": "node scripts/run-intelligence-slice.mjs"
+  },
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.seen.command",
+    "productName": "Seen Command",
+    "asar": false,
+    "files": [
+      "app/**",
+      "engine/**",
+      "intelligence/**",
+      "lib/**",
+      "org/**",
+      "scripts/**",
+      "public/**",
+      "data/**",
+      "brain/lib/**",
+      "package.json",
+      "build-info.json"
+    ],
+    "extraResources": [
+      {
+        "from": ".env.example",
+        "to": ".env"
+      },
+      {
+        "from": "tools/video-software-compiler",
+        "to": "video-software-compiler",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/*.egg-info/**",
+          "!**/.pytest_cache/**",
+          "!**/.mypy_cache/**",
+          "!**/.venv/**",
+          "!**/vsc-venv/**"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": "dir"
+    }
+  }
+}

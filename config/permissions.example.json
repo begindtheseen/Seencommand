@@ -1,0 +1,6 @@
+{
+  "default": "READ_ONLY",
+  "workers": { "repository-analyst": "READ_ONLY", "product-planner": "READ_ONLY", "implementation-worker": "BRANCH_WRITE", "test-worker": "LOCAL_WRITE", "code-reviewer": "READ_ONLY", "security-reviewer": "READ_ONLY", "database-reviewer": "READ_ONLY", "design-reviewer": "READ_ONLY", "deployment-verifier": "PREVIEW_DEPLOY" },
+  "productionRequiresApproval": true,
+  "destructiveRequiresApproval": true
+}

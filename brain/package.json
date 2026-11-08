@@ -1,0 +1,36 @@
+{
+  "name": "chronos-app",
+  "version": "0.4.0",
+  "private": true,
+  "description": "Chronos — a dedicated desktop app that visualizes the LIVE, unified memory graph: Seen Command's board-meeting graph and Seen's bi-temporal Chronos vault, in one temporal canvas.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "app:package": "electron-builder --mac",
+    "app:install": "electron-builder --mac && node scripts/install-app.mjs"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.seen.chronos",
+    "productName": "Chronos",
+    "asar": false,
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer.html",
+      "lib/**",
+      "package.json",
+      "build-info.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": "dir"
+    }
+  }
+}

@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "video-software-compiler"
+version = "0.1.0"
+description = "Private, local, evidence-backed video-to-software knowledge compiler"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = [
+  "pydantic>=2.7,<3",
+  "typer>=0.12,<1",
+  "rich>=13.7,<15",
+]
+
+[project.optional-dependencies]
+instagram = ["instaloader>=4.13,<5", "gallery-dl>=1.30,<2"]
+media = ["faster-whisper>=1.0,<2", "Pillow>=10,<12"]
+dev = ["pytest>=8,<9", "ruff>=0.6,<1", "mypy>=1.11,<2"]
+
+[project.scripts]
+video-software-compiler = "video_software_compiler.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["video_software_compiler"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".claude"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["B008"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]
